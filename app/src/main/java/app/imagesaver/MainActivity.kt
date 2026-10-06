@@ -83,6 +83,8 @@ class MainActivity : Activity() {
         }
         findViewById<Button>(R.id.zoomIn).setOnClickListener { preview.zoomIn() }
         findViewById<Button>(R.id.zoomOut).setOnClickListener { preview.zoomOut() }
+        findViewById<Button>(R.id.rotateLeft).setOnClickListener { preview.rotateLeft() }
+        findViewById<Button>(R.id.rotateRight).setOnClickListener { preview.rotateRight() }
         findViewById<Button>(R.id.zoomReset).setOnClickListener { preview.resetZoom() }
         findViewById<Button>(R.id.captureButton).setOnClickListener { onCapturePressed() }
     }
@@ -99,16 +101,19 @@ class MainActivity : Activity() {
     }
 
     private fun startDiscovery() {
-        val ip = NetworkHelper.localIpv4(this)
-        val hosts = ip?.let { LanDiscovery.subnetHosts(it) }.orEmpty()
         discoverStatus.visibility = View.VISIBLE
+        val iface = try { NetworkHelper.hotspotInterfaces(this).firstOrNull() } catch (e: SecurityException) { null }
+        val ip = iface?.ipv4
+        val hosts = ip?.let { LanDiscovery.subnetHosts(it) }.orEmpty()
         if (hosts.isEmpty()) {
-            discoverStatus.text = "Discovery failed: no local IPv4 network (connect to Wi-Fi/LAN)"
+            discoverStatus.text = "Hotspot not found. Turn on the Android Wi-Fi hotspot (or USB tethering) and connect the camera " +
+                "to it. Android does not let apps list hotspot clients, and some devices hide or share the hotspot " +
+                "interface; if this keeps failing, enter the camera URL manually."
             return
         }
         val prefix = ip!!.substringBeforeLast('.')
         discoverButton.text = "Cancel"
-        discoverStatus.text = "Scanning $prefix.0/24 …"
+        discoverStatus.text = "Scanning hotspot ${iface!!.name} $prefix.0/24 …"
         discoveryJob = scope.launch {
             try {
                 val found = LanDiscovery.scan(hosts, onProgress = { done, total ->

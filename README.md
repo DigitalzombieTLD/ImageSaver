@@ -4,13 +4,18 @@ Personal Android app for viewing MJPEG streams and saving captured images with m
 ## Features
 - Enter an MJPEG URL and press **Start**; the stream is shown in a zoomable preview (Zoom +/-, 1x reset, pinch, drag, double-tap reset; 1x–8x).
 - On connection failure or disconnect the app retries every second (never overlapping) until you press **Stop**.
-- **Discover** scans the /24 subnet (255.255.255.0) of the device's active IPv4 address (e.g. `192.168.1.x`) for hosts
-  with TCP port 80 open (max 32 parallel probes, short timeouts; nothing outside the local /24 is contacted). Reachable hosts
-  are probed with HTTP GET on common paths (`/`, `/video`, `/stream`, `/mjpg/video.mjpg`, `/video.mjpg`, `/?action=stream`,
-  `/videostream.cgi`); a `multipart/x-mixed-replace` response is marked "MJPEG stream" and its URL is used. Other reachable
-  HTTP hosts are listed as "HTTP service" with `http://<ip>/` – edit the stream path in the URL field afterwards. Selecting
-  an entry fills the URL field. The scan runs in the background, shows progress, can be cancelled (button turns into
-  **Cancel**) and is cancelled when the app goes to the background.
+- **Discover** scans only the /24 subnet of the Android **hotspot/tethering interface** (never the upstream Wi-Fi/LAN) for
+  hosts with TCP port 80 open (max 32 parallel probes, short timeouts, cancellable, off the UI thread). Turn on the hotspot
+  and connect the camera first. Reachable hosts are probed on common paths (`/`, `/video`, `/stream`, `/mjpg/video.mjpg`,
+  `/video.mjpg`, `/?action=stream`, `/videostream.cgi`); a `multipart/x-mixed-replace` response is marked "MJPEG stream",
+  other HTTP hosts are listed as "HTTP service" (edit the path afterwards). Selecting an entry fills the URL field.
+  **Android limitations:** there is no public API to get the tethering interface or the list of hotspot clients (and
+  ARP/neighbour tables are unreadable for apps on Android 10+). The app therefore finds the hotspot interface by
+  enumerating network interfaces with tethering-style names (`ap0`, `swlan0`, `wlan1`, `rndis0`, …) that are not used by any
+  regular network, and assumes a /24. If the hotspot shares the interface with the connected Wi-Fi, uses an unusual name, or
+  is off, discovery fails with a hint and the URL must be entered manually. Discovery is not guaranteed on every device/OS.
+- **Rotate ⟲ / ⟳** turns the preview in 90° steps (display only; saved JPEG bytes are never modified) and works with zoom/pan
+  (pan resets on rotation).
 - **Nummer** (decimal number pad) accepts an optionally signed decimal number (`,` or `.`; no exponent); invalid input is
   rejected and nothing is saved. **Stand** is free text (sanitized to `A-Za-z0-9.-`). Blank fields are omitted from the name.
 - **Capture** saves the currently displayed frame as a JPEG in the public `DCIM/ImageSaver` folder (created if needed) via
