@@ -27,18 +27,24 @@ class CaptureService(
         jpeg: ByteArray?,
         nummer: String,
         stand: String,
+        includeLocation: Boolean = true,
         locate: suspend () -> GpsCoordinates?,
     ): CaptureResult {
         if (FilenameBuilder.normalizeNummer(nummer) == null) {
             return CaptureResult.Failed("Nummer must be a decimal number (e.g. 12 or 12.5)", false)
         }
-        val coords = try {
-            withTimeoutOrNull(gpsTimeoutMs) { locate() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
+        if (FilenameBuilder.normalizeStand(stand) == null) {
+            return CaptureResult.Failed("Stand must be a decimal number (e.g. 12 or 12.5)", false)
         }
+        val coords = (if (includeLocation) {
+            try {
+                withTimeoutOrNull(gpsTimeoutMs) { locate() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        } else null)?.takeIf { it.latitude.isFinite() && it.longitude.isFinite() }
         val gps = coords != null
         if (jpeg == null || jpeg.isEmpty()) {
             return CaptureResult.Failed("No frame available to save. Is the stream running?", gps)

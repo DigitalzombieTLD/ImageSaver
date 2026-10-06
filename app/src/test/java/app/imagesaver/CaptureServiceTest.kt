@@ -33,12 +33,12 @@ class CaptureServiceTest {
     @Test fun nullLocationFallsBack() = runBlocking {
         val r = service(MemoryIdStore()).capture(byteArrayOf(1), "", "") { null } as CaptureResult.Saved
         assertFalse(r.gpsAvailable)
-        assertTrue(r.fileName.contains("_X"))
+        assertTrue(r.fileName.contains("_0.0_0.0_"))
     }
 
     @Test fun locationExceptionFallsBack() = runBlocking {
         val r = service(MemoryIdStore()).capture(byteArrayOf(1), "", "") { throw SecurityException("x") }
-        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_X"))
+        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_0.0_0.0_"))
     }
 
     @Test fun locationTimeoutFallsBack() = runBlocking {
@@ -46,7 +46,15 @@ class CaptureServiceTest {
             delay(5000)
             GpsCoordinates(1.0, 1.0)
         }
-        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_X") && !r.gpsAvailable)
+        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_0.0_0.0_") && !r.gpsAvailable)
+    }
+
+    @Test fun disabledLocationSkipsLookup() = runBlocking {
+        val r = service(MemoryIdStore()).capture(byteArrayOf(1), "", "", includeLocation = false) {
+            throw AssertionError("Location lookup must not run")
+        } as CaptureResult.Saved
+        assertFalse(r.gpsAvailable)
+        assertTrue(r.fileName.contains("_0.0_0.0_"))
     }
 
     @Test fun idsIncreaseAndCollisionsAvoided() = runBlocking {
@@ -59,6 +67,12 @@ class CaptureServiceTest {
 
     @Test fun invalidNummerFailsWithoutSaving() = runBlocking {
         val r = service(MemoryIdStore()).capture(byteArrayOf(1), "abc", "") { null }
+        assertTrue(r is CaptureResult.Failed)
+        assertEquals(0, tmp.root.listFiles()!!.size)
+    }
+
+    @Test fun invalidStandFailsWithoutSaving() = runBlocking {
+        val r = service(MemoryIdStore()).capture(byteArrayOf(1), "1", "abc") { null }
         assertTrue(r is CaptureResult.Failed)
         assertEquals(0, tmp.root.listFiles()!!.size)
     }

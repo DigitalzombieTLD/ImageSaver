@@ -16,14 +16,16 @@ Personal Android app for viewing MJPEG streams and saving captured images with m
   is off, discovery fails with a hint and the URL must be entered manually. Discovery is not guaranteed on every device/OS.
 - **Rotate ⟲ / ⟳** turns the preview in 90° steps (display only; saved JPEG bytes are never modified) and works with zoom/pan
   (pan resets on rotation).
-- **Nummer** (decimal number pad) accepts an optionally signed decimal number (`,` or `.`; no exponent); invalid input is
-  rejected and nothing is saved. **Stand** is free text (sanitized to `A-Za-z0-9.-`). Blank fields are omitted from the name.
+- **Nummer** and **Stand** use decimal number pads and accept optionally signed decimal numbers (`,` or `.`; no exponent);
+  invalid input is rejected and nothing is saved. Values are normalized to a `.` decimal separator. Empty fields use `X`.
+- **Include GPS location** is on by default and remembered across restarts. Turn it off to skip location permission and lookup
+  entirely; capture then saves immediately with `0.0_0.0` in the filename.
 - **Capture** saves the currently displayed frame as a JPEG in the public `DCIM/ImageSaver` folder (created if needed) via
   MediaStore, so it is visible in gallery apps. No broad storage access is requested (Android 9 and older ask for the legacy
   storage permission at first save).
-- Filename: `ID_YYYY-MM-DD_HH-mm-ss_LAT_LON_Nummer_Stand.jpg` (ID is persistent and increments across restarts).
-  If GPS is unavailable (permission denied, no fix, 10 s timeout) a status message is shown, the image is still saved and
-  the location component is `X`.
+- Filename: `ID_YYYY-MM-DD_HH-mm-ss_LAT_LON_Nummer_Stand.jpg` (ID is persistent and increments across restarts). Each
+  number field is always present; an empty field is `X`. If enabled GPS lookup is unavailable (permission denied, no fix,
+  or 10 s timeout), a status message is shown, the image is still saved, and the location component is `0.0_0.0`.
 - After each save the filename and size (or an error) is displayed together with an **Open image** button that opens the
   saved picture in an installed image viewer (hidden before a save and after a failed save).
 

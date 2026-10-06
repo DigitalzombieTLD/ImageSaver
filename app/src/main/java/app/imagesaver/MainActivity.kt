@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
 import java.net.HttpURLConnection
@@ -34,12 +35,14 @@ class MainActivity : Activity() {
     private var pendingFrame: ByteArray? = null
     private var pendingNummer: String = ""
     private var pendingStand: String = ""
+    private var pendingIncludeLocation = true
     private var discoveryJob: Job? = null
     private var savedUri: Uri? = null
 
     private lateinit var urlInput: EditText
     private lateinit var nummerInput: EditText
     private lateinit var standInput: EditText
+    private lateinit var includeLocation: CheckBox
     private lateinit var discoverButton: Button
     private lateinit var discoverStatus: TextView
     private lateinit var openButton: Button
@@ -56,6 +59,7 @@ class MainActivity : Activity() {
         urlInput = findViewById(R.id.urlInput)
         nummerInput = findViewById(R.id.nummerInput)
         standInput = findViewById(R.id.standInput)
+        includeLocation = findViewById(R.id.includeLocation)
         discoverButton = findViewById(R.id.discoverButton)
         discoverStatus = findViewById(R.id.discoverStatus)
         openButton = findViewById(R.id.openButton)
@@ -67,6 +71,10 @@ class MainActivity : Activity() {
 
         val prefs = getSharedPreferences("imagesaver", MODE_PRIVATE)
         urlInput.setText(prefs.getString("url", ""))
+        includeLocation.isChecked = prefs.getBoolean("includeLocation", true)
+        includeLocation.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("includeLocation", isChecked).apply()
+        }
         captureService = CaptureService(MediaStoreImageStorage(this), PrefsIdStore(this))
         discoverButton.setOnClickListener {
             if (discoveryJob?.isActive == true) cancelDiscovery() else startDiscovery()
@@ -220,10 +228,16 @@ class MainActivity : Activity() {
         pendingFrame = latestFrame // frame displayed at button press
         pendingNummer = nummerInput.text.toString()
         pendingStand = standInput.text.toString()
+        pendingIncludeLocation = includeLocation.isChecked
         savedUri = null
         openButton.visibility = View.GONE
         if (FilenameBuilder.normalizeNummer(pendingNummer) == null) {
             resultText.text = "Nummer must be a decimal number (e.g. 12 or 12.5)"
+            gpsText.text = ""
+            return
+        }
+        if (FilenameBuilder.normalizeStand(pendingStand) == null) {
+            resultText.text = "Stand must be a decimal number (e.g. 12 or 12.5)"
             gpsText.text = ""
             return
         }
@@ -233,12 +247,16 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQ_STORAGE)
             return
         }
-        requestLocationAndCapture()
+        continueCaptureAfterStoragePermission()
+    }
+
+    private fun continueCaptureAfterStoragePermission() {
+        if (pendingIncludeLocation) requestLocationAndCapture() else doCapture(false)
     }
 
     private fun requestLocationAndCapture() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            doCapture(true)
+            doCapture(locationLookupEnabled = true, locationPermissionGranted = true)
         } else {
             requestPermissions(
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
@@ -251,13 +269,15 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_STORAGE) {
-            if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) requestLocationAndCapture()
+            if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) continueCaptureAfterStoragePermission()
             else resultText.text = "Save failed: storage permission denied"
         }
-        if (requestCode == REQ_LOCATION) doCapture(grantResults.any { it == PackageManager.PERMISSION_GRANTED })
+        if (requestCode == REQ_LOCATION) {
+            doCapture(locationLookupEnabled = true, locationPermissionGranted = grantResults.any { it == PackageManager.PERMISSION_GRANTED })
+        }
     }
 
-    private fun doCapture(locationAllowed: Boolean) {
+    private fun doCapture(locationLookupEnabled: Boolean, locationPermissionGranted: Boolean = false) {
         val frame = pendingFrame
         val nummer = pendingNummer
         val stand = pendingStand
@@ -265,9 +285,12 @@ class MainActivity : Activity() {
         gpsText.text = ""
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                captureService.capture(frame, nummer, stand) {
-                    if (locationAllowed) LocationHelper.current(this@MainActivity) else null
-                }
+                captureService.capture(
+                    frame,
+                    nummer,
+                    stand,
+                    includeLocation = locationPermissionGranted,
+                ) { if (locationPermissionGranted) LocationHelper.current(this@MainActivity) else null }
             }
             when (result) {
                 is CaptureResult.Saved -> {
@@ -281,8 +304,11 @@ class MainActivity : Activity() {
                     openButton.visibility = View.GONE
                 }
             }
-            gpsText.text = if (result.gpsAvailable) "" else
-                "GPS coordinates unavailable${if (locationAllowed) "" else " (location permission denied)"} – using ${FilenameBuilder.NO_GPS}"
+            gpsText.text = when {
+                locationLookupEnabled && result.gpsAvailable -> ""
+                !locationLookupEnabled -> "Location lookup disabled – using ${FilenameBuilder.NO_GPS}"
+                else -> "GPS coordinates unavailable (permission denied, no fix, or timeout) – using ${FilenameBuilder.NO_GPS}"
+            }
         }
     }
 
