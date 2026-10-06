@@ -3,14 +3,21 @@ package app.imagesaver
 import android.content.Context
 import android.net.ConnectivityManager
 import java.net.Inet4Address
+import java.net.NetworkInterface
 
 object NetworkHelper {
-    /** IPv4 address of the active network, or null if there is none. */
-    fun localIpv4(context: Context): String? {
+    /** IPv4 hotspot/tethering interfaces (excluding interfaces used by regular networks); empty if none found. */
+    fun hotspotInterfaces(context: Context): List<IfaceInfo> {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = cm.activeNetwork ?: return null
-        val props = cm.getLinkProperties(network) ?: return null
-        return props.linkAddresses.map { it.address }.filterIsInstance<Inet4Address>()
-            .firstOrNull { !it.isLoopbackAddress }?.hostAddress
+        @Suppress("DEPRECATION")
+        val upstream = cm.allNetworks.mapNotNull { cm.getLinkProperties(it)?.interfaceName }.toSet()
+        val all = try {
+            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().filter { it.isUp && !it.isLoopback }.mapNotNull { ni ->
+                ni.inetAddresses.toList().filterIsInstance<Inet4Address>().firstOrNull()?.hostAddress?.let { IfaceInfo(ni.name, it) }
+            }
+        } catch (e: java.net.SocketException) {
+            emptyList()
+        }
+        return HotspotInterface.select(all, upstream)
     }
 }

@@ -20,6 +20,7 @@ class ZoomableImageView @JvmOverloads constructor(
     private var panX = 0f
     private var panY = 0f
     private val matrix = Matrix()
+    private var rotation = 0
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
@@ -54,6 +55,16 @@ class ZoomableImageView @JvmOverloads constructor(
         setZoomInternal(ZoomLimits.MIN)
     }
 
+    fun rotateLeft() = setRotation(Rotation.left(rotation))
+    fun rotateRight() = setRotation(Rotation.right(rotation))
+
+    private fun setRotation(deg: Int) {
+        rotation = deg
+        panX = 0f
+        panY = 0f
+        invalidate()
+    }
+
     private fun setZoomInternal(z: Float) {
         zoom = ZoomLimits.clamp(z)
         invalidate()
@@ -67,18 +78,23 @@ class ZoomableImageView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         val bmp = bitmap ?: return
-        val fit = minOf(width.toFloat() / bmp.width, height.toFloat() / bmp.height)
+        val swap = Rotation.swapsAxes(rotation)
+        val bw = (if (swap) bmp.height else bmp.width).toFloat()
+        val bh = (if (swap) bmp.width else bmp.height).toFloat()
+        val fit = minOf(width / bw, height / bh)
         val scale = fit * zoom
-        val scaledW = bmp.width * scale
-        val scaledH = bmp.height * scale
+        val scaledW = bw * scale
+        val scaledH = bh * scale
         // keep the image covering the view when larger than it, centered otherwise
         val maxX = maxOf(0f, (scaledW - width) / 2)
         val maxY = maxOf(0f, (scaledH - height) / 2)
         panX = panX.coerceIn(-maxX, maxX)
         panY = panY.coerceIn(-maxY, maxY)
         matrix.reset()
+        matrix.postTranslate(-bmp.width / 2f, -bmp.height / 2f)
+        matrix.postRotate(rotation.toFloat())
         matrix.postScale(scale, scale)
-        matrix.postTranslate((width - scaledW) / 2 + panX, (height - scaledH) / 2 + panY)
+        matrix.postTranslate(width / 2f + panX, height / 2f + panY)
         canvas.drawBitmap(bmp, matrix, null)
     }
 }
