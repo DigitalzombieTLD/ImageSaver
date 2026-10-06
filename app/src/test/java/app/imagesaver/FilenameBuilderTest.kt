@@ -3,7 +3,8 @@ package app.imagesaver
 import java.util.Date
 import java.util.TimeZone
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class FilenameBuilderTest {
@@ -11,18 +12,34 @@ class FilenameBuilderTest {
     private val time = Date(1_700_000_000_000L) // 2023-11-14 22:13:20 UTC
 
     @Test fun withGps() {
-        val name = FilenameBuilder.build(7, time, GpsCoordinates(48.1234567, -11.5), "hello", utc)
-        assertEquals("00007_2023-11-14_22-13-20_48.123457_-11.500000_hello.jpg", name)
+        val name = FilenameBuilder.build(7, time, GpsCoordinates(48.1234567, -11.5), "12,5", "hello", utc)
+        assertEquals("00007_2023-11-14_22-13-20_48.123457_-11.500000_12.5_hello.jpg", name)
     }
 
-    @Test fun noGps() {
-        val name = FilenameBuilder.build(1, time, null, "x", utc)
-        assertEquals("00001_2023-11-14_22-13-20_no_gps_x.jpg", name)
-        assertTrue(name.contains("_no_gps"))
+    @Test fun noGpsUsesX() {
+        val name = FilenameBuilder.build(1, time, null, "3", "x", utc)
+        assertEquals("00001_2023-11-14_22-13-20_X_3_x.jpg", name)
+        assertFalse(name.contains("no_gps"))
     }
 
-    @Test fun emptyTextOmitted() {
-        assertEquals("00001_2023-11-14_22-13-20_no_gps.jpg", FilenameBuilder.build(1, time, null, "  ", utc))
+    @Test fun emptyNummerAndStandOmitted() {
+        assertEquals("00001_2023-11-14_22-13-20_X.jpg", FilenameBuilder.build(1, time, null, " ", "  ", utc))
+    }
+
+    @Test fun standSanitizedAndSeparatedByUnderscores() {
+        assertEquals("00001_2023-11-14_22-13-20_X_1_a-b.jpg", FilenameBuilder.build(1, time, null, "1", "a/b", utc))
+    }
+
+    @Test fun nummerValidation() {
+        assertEquals("12", FilenameBuilder.normalizeNummer(" 12 "))
+        assertEquals("12.5", FilenameBuilder.normalizeNummer("12,5"))
+        assertEquals("0.5", FilenameBuilder.normalizeNummer(".5"))
+        assertEquals("-3.25", FilenameBuilder.normalizeNummer("-3.25"))
+        assertEquals("3", FilenameBuilder.normalizeNummer("+3."))
+        assertEquals("", FilenameBuilder.normalizeNummer(""))
+        for (bad in listOf("abc", "1e5", "1.2.3", "-", ".", "../1", "1_2", "1".repeat(30))) {
+            assertNull(bad, FilenameBuilder.normalizeNummer(bad))
+        }
     }
 
     @Test fun sanitizesUnsafeText() {
@@ -33,6 +50,6 @@ class FilenameBuilderTest {
     }
 
     @Test fun nonFiniteCoordinatesFallBack() {
-        assertEquals("_no_gps", FilenameBuilder.formatCoordinates(GpsCoordinates(Double.NaN, 1.0)))
+        assertEquals("X", FilenameBuilder.formatCoordinates(GpsCoordinates(Double.NaN, 1.0)))
     }
 }

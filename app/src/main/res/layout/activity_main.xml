@@ -25,7 +25,19 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Start" />
+
+        <Button
+            android:id="@+id/discoverButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Discover" />
     </LinearLayout>
+
+    <TextView
+        android:id="@+id/discoverStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/streamStatus"
@@ -67,14 +79,31 @@
             android:text="Zoom +" />
     </LinearLayout>
 
-    <EditText
-        android:id="@+id/labelInput"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Text for filename"
-        android:importantForAutofill="no"
-        android:inputType="text"
-        android:maxLines="1" />
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/nummerInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Nummer"
+            android:importantForAutofill="no"
+            android:inputType="numberDecimal|numberSigned"
+            android:maxLines="1" />
+
+        <EditText
+            android:id="@+id/standInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Stand"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:maxLines="1" />
+    </LinearLayout>
 
     <Button
         android:id="@+id/captureButton"
@@ -86,6 +115,13 @@
         android:id="@+id/resultText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
+
+    <Button
+        android:id="@+id/openButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Open image"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/gpsText"

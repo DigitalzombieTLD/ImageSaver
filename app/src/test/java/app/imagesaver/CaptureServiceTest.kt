@@ -19,10 +19,10 @@ class CaptureServiceTest {
     }
 
     private fun service(ids: IdStore, timeout: Long = 500) =
-        CaptureService(tmp.root, ids, timeout, { Date(0) })
+        CaptureService(FileImageStorage(tmp.root), ids, timeout, { Date(0) })
 
     @Test fun savesWithGps() = runBlocking {
-        val r = service(MemoryIdStore()).capture(byteArrayOf(1, 2, 3), "t") { GpsCoordinates(1.0, 2.0) }
+        val r = service(MemoryIdStore()).capture(byteArrayOf(1, 2, 3), "4", "t") { GpsCoordinates(1.0, 2.0) }
         r as CaptureResult.Saved
         assertTrue(r.gpsAvailable)
         assertEquals(3L, r.sizeBytes)
@@ -31,40 +31,46 @@ class CaptureServiceTest {
     }
 
     @Test fun nullLocationFallsBack() = runBlocking {
-        val r = service(MemoryIdStore()).capture(byteArrayOf(1), "") { null } as CaptureResult.Saved
+        val r = service(MemoryIdStore()).capture(byteArrayOf(1), "", "") { null } as CaptureResult.Saved
         assertFalse(r.gpsAvailable)
-        assertTrue(r.fileName.contains("_no_gps"))
+        assertTrue(r.fileName.contains("_X"))
     }
 
     @Test fun locationExceptionFallsBack() = runBlocking {
-        val r = service(MemoryIdStore()).capture(byteArrayOf(1), "") { throw SecurityException("x") }
-        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_no_gps"))
+        val r = service(MemoryIdStore()).capture(byteArrayOf(1), "", "") { throw SecurityException("x") }
+        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_X"))
     }
 
     @Test fun locationTimeoutFallsBack() = runBlocking {
-        val r = service(MemoryIdStore(), timeout = 50).capture(byteArrayOf(1), "") {
+        val r = service(MemoryIdStore(), timeout = 50).capture(byteArrayOf(1), "", "") {
             delay(5000)
             GpsCoordinates(1.0, 1.0)
         }
-        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_no_gps") && !r.gpsAvailable)
+        assertTrue(r is CaptureResult.Saved && r.fileName.contains("_X") && !r.gpsAvailable)
     }
 
     @Test fun idsIncreaseAndCollisionsAvoided() = runBlocking {
-        val first = service(MemoryIdStore()).capture(byteArrayOf(1), "a") { null } as CaptureResult.Saved
+        val first = service(MemoryIdStore()).capture(byteArrayOf(1), "1", "a") { null } as CaptureResult.Saved
         // simulate a restart where the stored counter was lost: same ID would collide
-        val second = service(MemoryIdStore()).capture(byteArrayOf(1), "a") { null } as CaptureResult.Saved
+        val second = service(MemoryIdStore()).capture(byteArrayOf(1), "1", "a") { null } as CaptureResult.Saved
         assertTrue(first.fileName != second.fileName)
         assertTrue(second.fileName.startsWith("00002_"))
     }
 
+    @Test fun invalidNummerFailsWithoutSaving() = runBlocking {
+        val r = service(MemoryIdStore()).capture(byteArrayOf(1), "abc", "") { null }
+        assertTrue(r is CaptureResult.Failed)
+        assertEquals(0, tmp.root.listFiles()!!.size)
+    }
+
     @Test fun missingFrameFails() = runBlocking {
-        val r = service(MemoryIdStore()).capture(null, "a") { null }
+        val r = service(MemoryIdStore()).capture(null, "1", "a") { null }
         assertTrue(r is CaptureResult.Failed && !r.gpsAvailable)
     }
 
     @Test fun storageErrorReported() = runBlocking {
         val blocker = tmp.newFile("blocker")
-        val r = CaptureService(File(blocker, "sub"), MemoryIdStore()).capture(byteArrayOf(1), "a") { null }
+        val r = CaptureService(FileImageStorage(File(blocker, "sub")), MemoryIdStore()).capture(byteArrayOf(1), "1", "a") { null }
         assertTrue(r is CaptureResult.Failed)
     }
 }
