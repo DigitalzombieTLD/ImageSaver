@@ -1,147 +1,191 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="8dp">
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="vertical"
+        android:padding="12dp">
 
         <EditText
             android:id="@+id/urlInput"
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
+            android:layout_marginBottom="4dp"
             android:hint="MJPEG URL (http://host:port/stream)"
             android:importantForAutofill="no"
             android:inputType="textUri"
             android:maxLines="1" />
 
-        <Button
-            android:id="@+id/connectButton"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Start" />
+            android:orientation="horizontal">
 
-        <Button
-            android:id="@+id/discoverButton"
-            android:layout_width="wrap_content"
+            <Button
+                android:id="@+id/connectButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="Start" />
+
+            <Button
+                android:id="@+id/discoverButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:text="Discover" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/discoverStatus"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Discover" />
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/streamStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Stopped" />
+
+        <app.imagesaver.ZoomableImageView
+            android:id="@+id/preview"
+            android:layout_width="match_parent"
+            android:layout_height="300dp"
+            android:layout_marginTop="6dp"
+            android:background="#000000"
+            android:contentDescription="Live camera preview" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/zoomOut"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:singleLine="true"
+                android:text="Zoom −" />
+
+            <Button
+                android:id="@+id/zoomReset"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
+                android:contentDescription="Reset zoom to 1x"
+                android:text="1×" />
+
+            <Button
+                android:id="@+id/zoomIn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:singleLine="true"
+                android:text="Zoom +" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/rotateLeft"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:contentDescription="Rotate preview left 90 degrees"
+                android:text="Rotate left" />
+
+            <Button
+                android:id="@+id/rotateRight"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:contentDescription="Rotate preview right 90 degrees"
+                android:text="Rotate right" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/nummerInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:hint="Nummer"
+                android:importantForAutofill="no"
+                android:inputType="numberDecimal|numberSigned"
+                android:maxLines="1" />
+
+            <EditText
+                android:id="@+id/standInput"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:hint="Stand"
+                android:importantForAutofill="no"
+                android:inputType="numberDecimal|numberSigned"
+                android:maxLines="1" />
+        </LinearLayout>
+
+        <CheckBox
+            android:id="@+id/includeLocation"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Include GPS location"
+            android:checked="true" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/captureButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="Capture" />
+
+            <Button
+                android:id="@+id/openButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:text="Open image"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/resultText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:id="@+id/gpsText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#B26A00" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/discoverStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:visibility="gone" />
-
-    <TextView
-        android:id="@+id/streamStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Stopped" />
-
-    <app.imagesaver.ZoomableImageView
-        android:id="@+id/preview"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:background="#000000" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/rotateLeft"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:contentDescription="Rotate preview left 90 degrees"
-            android:text="⟲" />
-
-        <Button
-            android:id="@+id/rotateRight"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:contentDescription="Rotate preview right 90 degrees"
-            android:text="⟳" />
-
-        <Button
-            android:id="@+id/zoomOut"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Zoom -" />
-
-        <Button
-            android:id="@+id/zoomReset"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="1x" />
-
-        <Button
-            android:id="@+id/zoomIn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Zoom +" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <EditText
-            android:id="@+id/nummerInput"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="Nummer"
-            android:importantForAutofill="no"
-            android:inputType="numberDecimal|numberSigned"
-            android:maxLines="1" />
-
-        <EditText
-            android:id="@+id/standInput"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="Stand"
-            android:importantForAutofill="no"
-            android:inputType="text"
-            android:maxLines="1" />
-    </LinearLayout>
-
-    <Button
-        android:id="@+id/captureButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Capture" />
-
-    <TextView
-        android:id="@+id/resultText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
-
-    <Button
-        android:id="@+id/openButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Open image"
-        android:visibility="gone" />
-
-    <TextView
-        android:id="@+id/gpsText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textColor="#B26A00" />
-</LinearLayout>
+</ScrollView>

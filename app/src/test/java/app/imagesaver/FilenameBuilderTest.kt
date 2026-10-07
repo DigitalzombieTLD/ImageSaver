@@ -16,18 +16,26 @@ class FilenameBuilderTest {
         assertEquals("00007_2023-11-14_22-13-20_48.123457_-11.500000_12.5_hello.jpg", name)
     }
 
-    @Test fun noGpsUsesX() {
+    @Test fun noGpsUsesZeroCoordinates() {
         val name = FilenameBuilder.build(1, time, null, "3", "x", utc)
-        assertEquals("00001_2023-11-14_22-13-20_X_3_x.jpg", name)
+        assertEquals("00001_2023-11-14_22-13-20_0.0_0.0_3_x.jpg", name)
         assertFalse(name.contains("no_gps"))
     }
 
-    @Test fun emptyNummerAndStandOmitted() {
-        assertEquals("00001_2023-11-14_22-13-20_X.jpg", FilenameBuilder.build(1, time, null, " ", "  ", utc))
+    @Test fun emptyNummerUsesX() {
+        assertEquals("00001_2023-11-14_22-13-20_0.0_0.0_X_2.5.jpg", FilenameBuilder.build(1, time, null, " ", "2.5", utc))
     }
 
-    @Test fun standSanitizedAndSeparatedByUnderscores() {
-        assertEquals("00001_2023-11-14_22-13-20_X_1_a-b.jpg", FilenameBuilder.build(1, time, null, "1", "a/b", utc))
+    @Test fun emptyStandUsesX() {
+        assertEquals("00001_2023-11-14_22-13-20_0.0_0.0_1.5_X.jpg", FilenameBuilder.build(1, time, null, "1.5", "  ", utc))
+    }
+
+    @Test fun emptyNummerAndStandBothUseX() {
+        assertEquals("00001_2023-11-14_22-13-20_0.0_0.0_X_X.jpg", FilenameBuilder.build(1, time, null, " ", "  ", utc))
+    }
+
+    @Test fun invalidStandCannotEnterFilename() {
+        assertEquals("00001_2023-11-14_22-13-20_0.0_0.0_1_X.jpg", FilenameBuilder.build(1, time, null, "1", "a/b", utc))
     }
 
     @Test fun nummerValidation() {
@@ -37,8 +45,12 @@ class FilenameBuilderTest {
         assertEquals("-3.25", FilenameBuilder.normalizeNummer("-3.25"))
         assertEquals("3", FilenameBuilder.normalizeNummer("+3."))
         assertEquals("", FilenameBuilder.normalizeNummer(""))
+        assertEquals("12.5", FilenameBuilder.normalizeStand("12,5"))
+        assertEquals("0.5", FilenameBuilder.normalizeStand(".5"))
+        assertEquals("", FilenameBuilder.normalizeStand(" "))
         for (bad in listOf("abc", "1e5", "1.2.3", "-", ".", "../1", "1_2", "1".repeat(30))) {
             assertNull(bad, FilenameBuilder.normalizeNummer(bad))
+            assertNull(bad, FilenameBuilder.normalizeStand(bad))
         }
     }
 
@@ -50,6 +62,6 @@ class FilenameBuilderTest {
     }
 
     @Test fun nonFiniteCoordinatesFallBack() {
-        assertEquals("X", FilenameBuilder.formatCoordinates(GpsCoordinates(Double.NaN, 1.0)))
+        assertEquals("0.0_0.0", FilenameBuilder.formatCoordinates(GpsCoordinates(Double.NaN, 1.0)))
     }
 }
