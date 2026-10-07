@@ -13,7 +13,9 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.ArrayAdapter
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.TextView
 import java.net.HttpURLConnection
 import java.net.URL
@@ -39,7 +41,13 @@ class MainActivity : Activity() {
     private var discoveryJob: Job? = null
     private var savedUri: Uri? = null
 
+    private var skipNextStatus = false
+
     private lateinit var urlInput: EditText
+    private lateinit var resolutionSpinner: Spinner
+    private lateinit var qualityInput: EditText
+    private lateinit var applySettings: Button
+    private lateinit var cameraSettingsText: TextView
     private lateinit var nummerInput: EditText
     private lateinit var standInput: EditText
     private lateinit var includeLocation: CheckBox
@@ -57,6 +65,10 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         urlInput = findViewById(R.id.urlInput)
+        resolutionSpinner = findViewById(R.id.resolutionSpinner)
+        qualityInput = findViewById(R.id.qualityInput)
+        applySettings = findViewById(R.id.applySettings)
+        cameraSettingsText = findViewById(R.id.cameraSettingsText)
         nummerInput = findViewById(R.id.nummerInput)
         standInput = findViewById(R.id.standInput)
         includeLocation = findViewById(R.id.includeLocation)
@@ -70,7 +82,12 @@ class MainActivity : Activity() {
         preview = findViewById(R.id.preview)
 
         val prefs = getSharedPreferences("imagesaver", MODE_PRIVATE)
-        urlInput.setText(prefs.getString("url", ""))
+        urlInput.setText(CameraApi.normalizeHost(prefs.getString("url", "")).orEmpty())
+        resolutionSpinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item, CameraResolution.values().map { it.displayName },
+        )
+        resolutionSpinner.setSelection(CameraResolution.VGA.ordinal)
+        applySettings.setOnClickListener { onApplySettings() }
         includeLocation.isChecked = prefs.getBoolean("includeLocation", true)
         includeLocation.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("includeLocation", isChecked).apply()
@@ -85,8 +102,14 @@ class MainActivity : Activity() {
             if (streamJob?.isActive == true) {
                 stopStream()
             } else {
-                prefs.edit().putString("url", urlInput.text.toString().trim()).apply()
-                startStream(urlInput.text.toString().trim())
+                val host = CameraApi.normalizeHost(urlInput.text.toString())
+                if (host == null) {
+                    streamStatus.text = "Enter a valid camera IP or hostname"
+                } else {
+                    urlInput.setText(host)
+                    prefs.edit().putString("url", host).apply()
+                    startStream(host)
+                }
             }
         }
         findViewById<Button>(R.id.zoomIn).setOnClickListener { preview.zoomIn() }
@@ -153,7 +176,7 @@ class MainActivity : Activity() {
         if (isFinishing) return
         AlertDialog.Builder(this)
             .setTitle("Select camera")
-            .setItems(found.map { it.label }.toTypedArray()) { _, i -> urlInput.setText(found[i].url) }
+            .setItems(found.map { it.label }.toTypedArray()) { _, i -> urlInput.setText(found[i].host) }
             .setNegativeButton("Cancel", null)
             .show()
     }
@@ -171,23 +194,64 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun startStream(url: String) {
+    private fun startStream(host: String, settingsRequest: Pair<Int, Int>? = null) {
+        val url = CameraApi.streamUrl(host)
         val previous = streamJob ?: stoppingJob
         streamJob = scope.launch {
             previous?.cancelAndJoin() // never overlap attempts when URL changes/restarts
-            if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                streamStatus.text = "Enter a valid http:// or https:// URL"
+            if (url == null) {
+                streamStatus.text = "Enter a valid camera IP or hostname"
                 connectButton.text = "Start"
                 return@launch
             }
             connectButton.text = "Stop"
+            if (settingsRequest != null) {
+                // single POST per user action; never repeated by the retry loop below
+                cameraSettingsText.text = "Applying settings…"
+                when (val r = withContext(Dispatchers.IO) { CameraApi.postSettings(host, settingsRequest.first, settingsRequest.second) }) {
+                    is SettingsResult.Applied -> {
+                        showSettings(r.settings)
+                        skipNextStatus = true
+                    }
+                    is SettingsResult.Failed -> cameraSettingsText.text = r.message
+                }
+            }
             runWithRetry(onError = { e ->
                 streamStatus.text = "Disconnected${e?.message?.let { ": $it" } ?: ""} – retrying in 1s…"
             }) {
                 streamStatus.text = "Connecting…"
-                withContext(Dispatchers.IO) { readStream(url) }
+                withContext(Dispatchers.IO) {
+                    // exactly one /status read per connection attempt, before the stream is opened
+                    if (skipNextStatus) {
+                        skipNextStatus = false
+                    } else {
+                        CameraApi.fetchStatus(host)?.let { s -> runOnUiThread { showSettings(s) } }
+                    }
+                    readStream(url)
+                }
             }
         }
+    }
+
+    private fun showSettings(s: CameraSettings) {
+        cameraSettingsText.text = "Camera: ${s.display}"
+        CameraResolution.fromId(s.resolutionId)?.let { resolutionSpinner.setSelection(it.ordinal) }
+        qualityInput.setText(s.quality.toString())
+    }
+
+    private fun onApplySettings() {
+        val host = CameraApi.normalizeHost(urlInput.text.toString())
+        if (host == null) {
+            cameraSettingsText.text = "Enter a valid camera IP or hostname"
+            return
+        }
+        val quality = CameraApi.parseQuality(qualityInput.text.toString())
+        if (quality == null) {
+            cameraSettingsText.text = "Quality must be an integer from ${CameraApi.MIN_QUALITY} to ${CameraApi.MAX_QUALITY}"
+            return
+        }
+        val resolution = CameraResolution.values()[resolutionSpinner.selectedItemPosition]
+        startStream(host, resolution.id to quality)
     }
 
     private fun stopStream() {
