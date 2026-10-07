@@ -22,7 +22,7 @@ class CaptureServiceTest {
         CaptureService(FileImageStorage(tmp.root), ids, timeout, { Date(0) })
 
     @Test fun savesWithGps() = runBlocking {
-        val r = service(MemoryIdStore()).capture(byteArrayOf(1, 2, 3), "4", "t") { GpsCoordinates(1.0, 2.0) }
+        val r = service(MemoryIdStore()).capture(byteArrayOf(1, 2, 3), "4", "2.5") { GpsCoordinates(1.0, 2.0) }
         r as CaptureResult.Saved
         assertTrue(r.gpsAvailable)
         assertEquals(3L, r.sizeBytes)
@@ -58,9 +58,9 @@ class CaptureServiceTest {
     }
 
     @Test fun idsIncreaseAndCollisionsAvoided() = runBlocking {
-        val first = service(MemoryIdStore()).capture(byteArrayOf(1), "1", "a") { null } as CaptureResult.Saved
+        val first = service(MemoryIdStore()).capture(byteArrayOf(1), "1", "1.5") { null } as CaptureResult.Saved
         // simulate a restart where the stored counter was lost: same ID would collide
-        val second = service(MemoryIdStore()).capture(byteArrayOf(1), "1", "a") { null } as CaptureResult.Saved
+        val second = service(MemoryIdStore()).capture(byteArrayOf(1), "1", "1.5") { null } as CaptureResult.Saved
         assertTrue(first.fileName != second.fileName)
         assertTrue(second.fileName.startsWith("00002_"))
     }
@@ -78,13 +78,13 @@ class CaptureServiceTest {
     }
 
     @Test fun missingFrameFails() = runBlocking {
-        val r = service(MemoryIdStore()).capture(null, "1", "a") { null }
+        val r = service(MemoryIdStore()).capture(null, "1", "1.5") { null }
         assertTrue(r is CaptureResult.Failed && !r.gpsAvailable)
     }
 
     @Test fun storageErrorReported() = runBlocking {
         val blocker = tmp.newFile("blocker")
-        val r = CaptureService(FileImageStorage(File(blocker, "sub")), MemoryIdStore()).capture(byteArrayOf(1), "1", "a") { null }
+        val r = CaptureService(FileImageStorage(File(blocker, "sub")), MemoryIdStore()).capture(byteArrayOf(1), "1", "1.5") { null }
         assertTrue(r is CaptureResult.Failed)
     }
 }
