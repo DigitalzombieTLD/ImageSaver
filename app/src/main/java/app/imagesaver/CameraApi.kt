@@ -82,49 +82,51 @@ object CameraApi {
     fun capabilitiesUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/api/capabilities" }
     fun settingsUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/api/settings" }
 
-    fun parseCapabilities(json: String): CameraCapabilities? = try {
-        val root = JSONObject(json)
-        val connected = root.opt("connected") as? Boolean ?: return null
-        val modesJson = root.opt("modes") as? JSONArray ?: return null
-        val modes = mutableListOf<CameraMode>()
-        for (i in 0 until modesJson.length()) {
-            val mode = modesJson.optJSONObject(i) ?: return null
-            val resolution = mode.optString("resolution", "").takeIf { RESOLUTION.matches(it) } ?: return null
-            val fpsJson = mode.opt("fps") as? JSONArray ?: return null
-            val fps = mutableListOf<Int>()
-            for (j in 0 until fpsJson.length()) {
-                val value = fpsJson.optIntStrict(j) ?: return null
-                if (value <= 0) return null
-                fps += value
+    fun parseCapabilities(json: String): CameraCapabilities? {
+        return try {
+            val root = JSONObject(json)
+            val connected = root.opt("connected") as? Boolean ?: return null
+            val modesJson = root.opt("modes") as? JSONArray ?: return null
+            val modes = mutableListOf<CameraMode>()
+            for (i in 0 until modesJson.length()) {
+                val mode = modesJson.optJSONObject(i) ?: return null
+                val resolution = mode.optString("resolution", "").takeIf { RESOLUTION.matches(it) } ?: return null
+                val fpsJson = mode.opt("fps") as? JSONArray ?: return null
+                val fps = mutableListOf<Int>()
+                for (j in 0 until fpsJson.length()) {
+                    val value = fpsJson.optIntStrict(j) ?: return null
+                    if (value <= 0) return null
+                    fps += value
+                }
+                modes += CameraMode(resolution, fps.distinct())
             }
-            modes += CameraMode(resolution, fps.distinct())
-        }
-        if (connected && modes.isEmpty()) return null
-        if (!root.has("quality")) return null
-        val qualityValue = root.opt("quality")
-        val quality = when {
-            qualityValue == JSONObject.NULL -> null
-            qualityValue is JSONObject -> {
-                val control = qualityValue.optString("control", "").takeIf { it.isNotBlank() } ?: return null
-                val min = qualityValue.optIntStrict("min") ?: return null
-                val max = qualityValue.optIntStrict("max") ?: return null
-                val step = qualityValue.optIntStrict("step") ?: return null
-                val default = qualityValue.optIntStrict("default") ?: return null
-                val value = qualityValue.optIntStrict("value") ?: return null
-                if (min > max || step <= 0 || default !in min..max || value !in min..max) return null
-                QualityCapability(control, min, max, step, default, value)
+            if (connected && modes.isEmpty()) return null
+            if (!root.has("quality")) return null
+            val qualityValue = root.opt("quality")
+            val quality = when {
+                qualityValue == JSONObject.NULL -> null
+                qualityValue is JSONObject -> {
+                    val control = qualityValue.optString("control", "").takeIf { it.isNotBlank() } ?: return null
+                    val min = qualityValue.optIntStrict("min") ?: return null
+                    val max = qualityValue.optIntStrict("max") ?: return null
+                    val step = qualityValue.optIntStrict("step") ?: return null
+                    val default = qualityValue.optIntStrict("default") ?: return null
+                    val value = qualityValue.optIntStrict("value") ?: return null
+                    if (min > max || step <= 0 || default !in min..max || value !in min..max) return null
+                    QualityCapability(control, min, max, step, default, value)
+                }
+                else -> return null
             }
-            else -> return null
+            CameraCapabilities(
+                connected = connected,
+                device = root.optString("device").takeIf { it.isNotBlank() && it != "null" },
+                format = root.optString("format").takeIf { it.isNotBlank() && it != "null" },
+                modes = modes,
+                quality = quality,
+            )
+        } catch (e: JSONException) {
+            null
         }
-        CameraCapabilities(
-            connected = connected,
-            device = root.optString("device").takeIf { it.isNotBlank() && it != "null" },
-            format = root.optString("format").takeIf { it.isNotBlank() && it != "null" },
-            modes = modes,
-            quality = quality,
-        )
-    } catch (e: JSONException) {
-        null
     }
 
     fun parseSettings(json: String): CameraSettings? = try {
@@ -134,12 +136,14 @@ object CameraApi {
         null
     }
 
-    fun parseSettingsResponse(json: String): CameraSettings? = try {
-        val root = JSONObject(json)
-        if (root.opt("saved") != true || root.has("error")) return null
-        parseSettingsObject(root.optJSONObject("settings") ?: return null)
-    } catch (e: JSONException) {
-        null
+    fun parseSettingsResponse(json: String): CameraSettings? {
+        return try {
+            val root = JSONObject(json)
+            if (root.opt("saved") != true || root.has("error")) return null
+            parseSettingsObject(root.optJSONObject("settings") ?: return null)
+        } catch (e: JSONException) {
+            null
+        }
     }
 
     private fun parseSettingsObject(root: JSONObject): CameraSettings? {
