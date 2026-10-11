@@ -49,54 +49,6 @@
             android:layout_height="wrap_content"
             android:visibility="gone" />
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <Spinner
-                android:id="@+id/resolutionSpinner"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1" />
-
-            <Spinner
-                android:id="@+id/fpsSpinner"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="4dp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/qualityInput"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:hint="Quality"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:maxLength="9"
-                android:maxLines="1" />
-
-            <Button
-                android:id="@+id/applySettings"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:singleLine="true"
-                android:text="Apply" />
-        </LinearLayout>
-
         <TextView
             android:id="@+id/cameraSettingsText"
             android:layout_width="match_parent"
@@ -195,6 +147,51 @@
                 android:contentDescription="Rotate preview right 90 degrees"
                 android:text="Rotate right" />
         </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Camera controls"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/mainControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <Button
+            android:id="@+id/moreControlsToggle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="More camera controls ▸"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/moreControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/applyControls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Apply controls"
+            android:enabled="false" />
+
+        <TextView
+            android:id="@+id/controlsStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <CheckBox
+            android:id="@+id/debugIgnoreSaved"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Debug: ignore saved camera settings" />
 
         <LinearLayout
             android:layout_width="match_parent"

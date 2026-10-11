@@ -17,14 +17,30 @@ Personal Android app for viewing MJPEG streams and saving captured images with m
   enumerating network interfaces with tethering-style names (`ap0`, `swlan0`, `wlan1`, `rndis0`, …) that are not used by any
   regular network, and assumes a /24. If the hotspot shares the interface with the connected Wi-Fi, uses an unusual name, or
   is off, discovery fails with a hint and the URL must be entered manually. Discovery is not guaranteed on every device/OS.
-- **Mobile Webcam settings:** before opening `/stream`, the app reads `GET /api/capabilities` and `GET /api/settings` off the
-  UI thread. Capabilities supply the connected state, advertised resolution modes and per-mode frame rates, plus the
-  optional adjustable JPEG quality range. Resolution and FPS choices are dynamic; quality editing is hidden when that
-  control is unavailable. **Apply** sends one JSON `POST /api/settings` containing the selected resolution and FPS (and
-  quality only when advertised). The POST response is `{ "saved": true, "settings": { ... } }`; the app displays those
-  settings and restarts the stream without an extra settings read. API errors and a disconnected camera are shown; a failed
-  API read does not prevent trying the MJPEG stream. Capabilities and settings are refreshed on connection attempts/retries,
-  never per frame.
+- **Stream parsing:** the app reads the `multipart/x-mixed-replace` boundary from the `/stream` response Content-Type
+  (quoted or unquoted) and parses the parts incrementally: delimiter line, part headers, then the JPEG, using the part's
+  `Content-Length` when present (otherwise reading up to the next delimiter; JPEG SOI/EOI scanning is used only when the
+  response has no boundary). Header/frame sizes are limited and only the current frame is buffered. If the stream ends
+  before the first frame, is truncated, or delivers JPEGs that cannot be decoded, the status shows the reason, e.g.
+  `Disconnected: Stream ended before the first frame (…) – retrying in 1s…`, and the one-second retry continues.
+- **Camera controls:** the app reads `GET /api/capabilities` and keeps the metadata of every advertised control from
+  `controls` and `focus_controls` (deduplicated by name): type `int` or `menu`, min/max/step/default/value. Capability
+  `default` values may lie outside min..max (sentinels) and are tolerated; the current `value` is the initial position.
+  **Resolution, FPS and quality are not editable and never sent** – the Pi/uStreamer serves its configured mode; the
+  active resolution/FPS from `GET /api/settings` is shown read-only.
+  Below the zoom/rotation buttons the main page shows sliders for brightness, contrast, saturation, gamma, gain, sharpness
+  and **Focus** (`focus_absolute`), as far as the camera advertises them. Every other advertised control (hue,
+  power_line_frequency, white_balance_temperature, backlight_compensation, auto_exposure, exposure_time_absolute, …) is in
+  **More camera controls**. Menu controls offer the integer indexes min..max (friendly names for power_line_frequency and
+  auto_exposure, raw number kept). **Apply controls** sends one `POST /api/settings` with
+  `{"controls": {name: int}}` containing only controls you changed (validated against min/max/step); the Pi stops the
+  stream when settings change, so the app then restarts it. Nothing is ever POSTed automatically at startup, reconnect or
+  retry, and settings/network calls run off the UI thread. Success or failure is shown below the Apply button.
+- **Debug: ignore saved camera settings** (persistent checkbox): the app does not call `GET /api/settings` and does not
+  display or use saved settings (sliders start from the camera's advertised values); capabilities are still read to build
+  the controls and streaming continues. This only affects the app: the provided Pi server loads
+  `/var/lib/mobile-webcam/settings.json` and reapplies saved controls itself in `start_stream()` and has no endpoint/flag to
+  suppress that, so bypassing the server's persistence would need a companion server change.
 - **Rotate ⟲ / ⟳** turns the preview in 90° steps (display only; saved JPEG bytes are never modified) and works with zoom/pan
   (pan resets on rotation).
 - **Nummer** and **Stand** use decimal number pads and accept optionally signed decimal numbers (`,` or `.`; no exponent);

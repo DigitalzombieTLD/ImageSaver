@@ -9,41 +9,89 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
-data class CameraMode(val resolution: String, val fps: List<Int>) {
-    val displayName: String
-        get() = "$resolution${if (fps.isEmpty()) "" else " (${fps.joinToString(", ")} fps)"}"
-}
-
-data class QualityCapability(
-    val control: String,
+/** One adjustable V4L2 control advertised by `/api/capabilities`. [default] may be a sentinel outside min..max. */
+data class CameraControl(
+    val name: String,
+    val type: String,
     val min: Int,
     val max: Int,
     val step: Int,
-    val default: Int,
-    val value: Int,
+    val default: Int?,
+    val value: Int?,
 ) {
-    fun accepts(value: Int): Boolean = step > 0 && value in min..max && (value - min) % step == 0
+    val isMenu: Boolean get() = type == TYPE_MENU
+    val effectiveStep: Int get() = if (isMenu || step <= 0) 1 else step
+
+    /** Menu controls offer every index in min..max; integer controls honour step. */
+    fun accepts(v: Int): Boolean = v in min..max && (isMenu || (v - min) % effectiveStep == 0)
+
+    /** Valid current value if the camera reported one inside min..max, else null. */
+    val validValue: Int? get() = value?.takeIf { it in min..max }
+
+    val title: String get() = ControlLabels.title(name)
+
+    companion object {
+        const val TYPE_INT = "int"
+        const val TYPE_MENU = "menu"
+    }
 }
 
 data class CameraCapabilities(
     val connected: Boolean,
     val device: String?,
     val format: String?,
-    val modes: List<CameraMode>,
-    val quality: QualityCapability?,
+    val controls: List<CameraControl>,
 )
 
-data class CameraSettings(val resolution: String, val fps: Int?, val quality: Int?) {
+/** Saved settings from GET /api/settings. Resolution/FPS/quality are read-only status; the app never sends them. */
+data class CameraSettings(
+    val resolution: String?,
+    val fps: Int?,
+    val quality: Int?,
+    val controls: Map<String, Int>,
+) {
     val display: String
-        get() = "$resolution, ${fps?.let { "$it fps" } ?: "camera-default fps"}" +
-            (quality?.let { ", quality $it" } ?: "")
+        get() = listOfNotNull(
+            resolution,
+            fps?.let { "$it fps" },
+            quality?.let { "quality $it" },
+        ).joinToString(", ").ifEmpty { "no mode information" }
 }
 
-data class SettingsRequest(val resolution: String, val fps: Int?, val quality: Int?)
-
 sealed class SettingsResult {
-    data class Applied(val settings: CameraSettings) : SettingsResult()
+    data class Applied(val settings: CameraSettings?) : SettingsResult()
     data class Failed(val message: String) : SettingsResult()
+}
+
+object ControlLabels {
+    val MAIN = listOf("brightness", "contrast", "saturation", "gamma", "gain", "sharpness", "focus_absolute")
+    private val MORE_ORDER = listOf(
+        "hue", "power_line_frequency", "white_balance_temperature", "backlight_compensation",
+        "auto_exposure", "exposure_time_absolute",
+    )
+
+    fun title(name: String): String = when (name) {
+        "focus_absolute" -> "Focus"
+        else -> name.split('_').filter { it.isNotEmpty() }.joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+    }
+
+    /** Friendly label for a menu index when known; the raw number is always kept in the text. */
+    fun menuLabel(name: String, value: Int): String {
+        val friendly = when (name) {
+            "power_line_frequency" -> listOf("Disabled", "50 Hz", "60 Hz", "Auto").getOrNull(value)
+            "auto_exposure" -> listOf("Auto", "Manual", "Shutter priority", "Aperture priority").getOrNull(value)
+            else -> null
+        }
+        return if (friendly != null) "$value – $friendly" else "$value"
+    }
+
+    /** Splits into (main-page controls in fixed order, remaining controls for the submenu). */
+    fun split(controls: List<CameraControl>): Pair<List<CameraControl>, List<CameraControl>> {
+        val main = MAIN.mapNotNull { n -> controls.firstOrNull { it.name == n } }
+        val rest = controls.filter { it.name !in MAIN }
+            .sortedWith(compareBy({ MORE_ORDER.indexOf(it.name).let { i -> if (i < 0) Int.MAX_VALUE else i } }, { it.name }))
+        return main to rest
+    }
 }
 
 /** Helpers for the Mobile Webcam API and blocking HTTP calls, always called off the UI thread. */
@@ -82,109 +130,108 @@ object CameraApi {
     fun capabilitiesUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/api/capabilities" }
     fun settingsUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/api/settings" }
 
+    /** Lenient: ignores resolutions/FPS/quality; controls with unusable metadata are skipped, never fatal. */
     fun parseCapabilities(json: String): CameraCapabilities? {
         return try {
             val root = JSONObject(json)
-            val connected = root.opt("connected") as? Boolean ?: return null
-            val modesJson = root.opt("modes") as? JSONArray ?: return null
-            val modes = mutableListOf<CameraMode>()
-            for (i in 0 until modesJson.length()) {
-                val mode = modesJson.optJSONObject(i) ?: return null
-                val resolution = mode.optString("resolution", "").takeIf { RESOLUTION.matches(it) } ?: return null
-                val fpsJson = mode.opt("fps") as? JSONArray ?: return null
-                val fps = mutableListOf<Int>()
-                for (j in 0 until fpsJson.length()) {
-                    val value = fpsJson.optIntStrict(j) ?: return null
-                    if (value <= 0) return null
-                    fps += value
-                }
-                modes += CameraMode(resolution, fps.distinct())
-            }
-            if (connected && modes.isEmpty()) return null
-            if (!root.has("quality")) return null
-            val qualityValue = root.opt("quality")
-            val quality = when {
-                qualityValue == JSONObject.NULL -> null
-                qualityValue is JSONObject -> {
-                    val control = qualityValue.optString("control", "").takeIf { it.isNotBlank() } ?: return null
-                    val min = qualityValue.optIntStrict("min") ?: return null
-                    val max = qualityValue.optIntStrict("max") ?: return null
-                    val step = qualityValue.optIntStrict("step") ?: return null
-                    val default = qualityValue.optIntStrict("default") ?: return null
-                    val value = qualityValue.optIntStrict("value") ?: return null
-                    if (min > max || step <= 0 || default !in min..max || value !in min..max) return null
-                    QualityCapability(control, min, max, step, default, value)
-                }
+            val connected = when (val c = root.opt("connected")) {
+                is Boolean -> c
+                null, JSONObject.NULL -> true
                 else -> return null
+            }
+            val controls = LinkedHashMap<String, CameraControl>()
+            // "controls" wins; "focus_controls" may repeat the same names
+            for (key in listOf("controls", "focus_controls")) {
+                for (control in parseControlGroup(root.opt(key))) controls.putIfAbsent(control.name, control)
             }
             CameraCapabilities(
                 connected = connected,
                 device = root.optString("device").takeIf { it.isNotBlank() && it != "null" },
                 format = root.optString("format").takeIf { it.isNotBlank() && it != "null" },
-                modes = modes,
-                quality = quality,
+                controls = controls.values.toList(),
             )
         } catch (e: JSONException) {
             null
         }
     }
 
-    fun parseSettings(json: String): CameraSettings? = try {
-        val root = JSONObject(json)
-        parseSettingsObject(root)
-    } catch (e: JSONException) {
-        null
+    private fun parseControlGroup(group: Any?): List<CameraControl> {
+        val result = mutableListOf<CameraControl>()
+        when (group) {
+            is JSONObject -> group.keys().forEach { name ->
+                parseControl(name, group.opt(name) as? JSONObject)?.let(result::add)
+            }
+            is JSONArray -> for (i in 0 until group.length()) {
+                val o = group.optJSONObject(i) ?: continue
+                parseControl(o.optString("name", ""), o)?.let(result::add)
+            }
+        }
+        return result
     }
 
-    fun parseSettingsResponse(json: String): CameraSettings? {
+    private fun parseControl(name: String, o: JSONObject?): CameraControl? {
+        if (o == null || name.isBlank()) return null
+        val type = o.optString("type", CameraControl.TYPE_INT).lowercase()
+        if (type != CameraControl.TYPE_INT && type != CameraControl.TYPE_MENU) return null
+        val min = o.optIntStrict("min") ?: return null
+        val max = o.optIntStrict("max") ?: return null
+        if (min > max) return null
+        val step = o.optIntStrict("step") ?: 1
+        return CameraControl(name, type, min, max, step, o.optIntStrict("default"), o.optIntStrict("value"))
+    }
+
+    fun parseSettings(json: String): CameraSettings? {
         return try {
             val root = JSONObject(json)
-            if (root.opt("saved") != true || root.has("error")) return null
-            parseSettingsObject(root.optJSONObject("settings") ?: return null)
+            parseSettingsObject(root.optJSONObject("settings") ?: root)
         } catch (e: JSONException) {
             null
         }
     }
 
-    private fun parseSettingsObject(root: JSONObject): CameraSettings? {
-        val resolution = root.optString("resolution", "").takeIf { RESOLUTION.matches(it) } ?: return null
-        if (!root.has("fps") || !root.has("quality")) return null
-        val fps = if (root.opt("fps") == JSONObject.NULL) null else root.optIntStrict("fps") ?: return null
-        val quality = if (root.opt("quality") == JSONObject.NULL) null else root.optIntStrict("quality") ?: return null
-        if (fps != null && fps <= 0) return null
-        if (quality != null && quality < 0) return null
-        return CameraSettings(resolution, fps, quality)
+    fun parseSettingsResponse(json: String): CameraSettings? {
+        return try {
+            val root = JSONObject(json)
+            if (root.opt("saved") == false || root.has("error")) return null
+            parseSettingsObject(root.optJSONObject("settings") ?: root)
+        } catch (e: JSONException) {
+            null
+        }
     }
 
-    fun settingsBody(resolution: String, fps: Int?, quality: Int?): ByteArray? {
-        if (!RESOLUTION.matches(resolution) || (fps != null && fps <= 0) || (quality != null && quality < 0)) return null
-        val body = JSONObject()
-            .put("resolution", resolution)
-            .put("fps", fps ?: JSONObject.NULL)
-        if (quality != null) body.put("quality", quality)
-        return body.toString().toByteArray(Charsets.UTF_8)
+    private fun parseSettingsObject(root: JSONObject): CameraSettings {
+        val controls = LinkedHashMap<String, Int>()
+        root.optJSONObject("controls")?.let { c ->
+            c.keys().forEach { k -> c.optIntStrict(k)?.let { controls[k] = it } }
+        }
+        return CameraSettings(
+            resolution = root.optString("resolution", "").takeIf { RESOLUTION.matches(it) },
+            fps = root.optIntStrict("fps")?.takeIf { it > 0 },
+            quality = root.optIntStrict("quality")?.takeIf { it >= 0 },
+            controls = controls,
+        )
     }
 
-    fun validateSettings(
-        capabilities: CameraCapabilities,
-        resolution: String,
-        fps: Int?,
-        quality: Int?,
-    ): String? {
-        val mode = capabilities.modes.firstOrNull { it.resolution == resolution }
-            ?: return "Select a resolution advertised by the camera"
-        if (fps != null && fps !in mode.fps) return "Select a frame rate advertised for $resolution"
-        if (quality != null) {
-            val range = capabilities.quality ?: return "This camera does not support adjustable JPEG quality"
-            if (!range.accepts(quality)) return "Quality must be ${range.min}–${range.max} in steps of ${range.step}"
+    /** POST body: only `controls` (name -> integer); resolution and FPS are never sent. */
+    fun settingsBody(changes: Map<String, Int>): ByteArray? {
+        if (changes.isEmpty()) return null
+        val controls = JSONObject()
+        changes.forEach { (k, v) -> controls.put(k, v) }
+        return JSONObject().put("controls", controls).toString().toByteArray(Charsets.UTF_8)
+    }
+
+    /** Returns an error message if any change is for an unadvertised control or violates min/max/step. */
+    fun validateControls(capabilities: CameraCapabilities, changes: Map<String, Int>): String? {
+        if (changes.isEmpty()) return "No controls changed"
+        for ((name, value) in changes) {
+            val control = capabilities.controls.firstOrNull { it.name == name }
+                ?: return "Camera does not support $name"
+            if (!control.accepts(value)) {
+                return "${control.title} must be ${control.min}–${control.max}" +
+                    (if (control.isMenu) "" else " in steps of ${control.effectiveStep}")
+            }
         }
         return null
-    }
-
-    fun parseQuality(text: String?, capability: QualityCapability): Int? {
-        val value = text?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) && it.length <= 9 }
-            ?.toIntOrNull() ?: return null
-        return value.takeIf(capability::accepts)
     }
 
     fun errorForStatus(code: Int): String = when (code) {
@@ -220,10 +267,9 @@ object CameraApi {
         }
     }
 
-    fun postSettings(host: String, request: SettingsRequest): SettingsResult {
+    fun postSettings(host: String, changes: Map<String, Int>): SettingsResult {
         val url = settingsUrl(host) ?: return SettingsResult.Failed("Invalid camera host")
-        val body = settingsBody(request.resolution, request.fps, request.quality)
-            ?: return SettingsResult.Failed("Invalid camera settings")
+        val body = settingsBody(changes) ?: return SettingsResult.Failed("No controls to apply")
         return try {
             val connection = URL(url).openConnection() as HttpURLConnection
             connection.connectTimeout = 5000
@@ -235,22 +281,23 @@ object CameraApi {
             try {
                 connection.outputStream.use { it.write(body) }
                 val code = connection.responseCode
-                if (code !in 200..299) return SettingsResult.Failed(errorForStatus(code))
+                if (code !in 200..299) {
+                    val detail = try { connection.errorStream?.use { readJson(it) } } catch (e: IOException) { null }
+                    val reason = detail?.let { runCatching { JSONObject(it).optString("error") }.getOrNull() }
+                        ?.takeIf { it.isNotBlank() }
+                    return SettingsResult.Failed(errorForStatus(code) + (reason?.let { ": $it" } ?: ""))
+                }
                 val text = connection.inputStream.use { readJson(it) }
+                if (text.isBlank()) return SettingsResult.Applied(null)
                 val settings = parseSettingsResponse(text)
-                if (settings == null) SettingsResult.Failed("Malformed camera settings response or change was not saved")
-                else SettingsResult.Applied(settings)
+                    ?: return SettingsResult.Failed("Camera did not confirm the change: ${text.take(200)}")
+                SettingsResult.Applied(settings)
             } finally {
                 connection.disconnect()
             }
         } catch (e: IOException) {
             SettingsResult.Failed("Network error: ${e.message ?: e.javaClass.simpleName}")
         }
-    }
-
-    private fun JSONArray.optIntStrict(index: Int): Int? {
-        if (index !in 0 until length()) return null
-        return (opt(index) as? Number)?.toInt()?.takeIf { (opt(index) as Number).toDouble() == it.toDouble() }
     }
 
     private fun JSONObject.optIntStrict(key: String): Int? =
