@@ -27,7 +27,7 @@ class FrameStreamTest {
         val stats = FrameStream.consume(
             ByteArrayInputStream(part(good) + part(good)), ct,
             decode = { it.size },
-        ) { jpeg, _, first -> frames.add(jpeg); firsts.add(first) }
+        ) { jpeg, _, first -> frames.add(jpeg); firsts.add(first); true }
         assertEquals(2, stats.received)
         assertEquals(2, stats.decoded)
         assertEquals(listOf(true, false), firsts)
@@ -41,7 +41,7 @@ class FrameStreamTest {
             ByteArrayInputStream(part(bad) + part(good)), ct,
             decode = { if (it[2] == 6.toByte()) null else it.size },
             onDecodeFailure = { failures.add(it.failureDiagnostic()) },
-        ) { jpeg, _, _ -> shown.add(jpeg) }
+        ) { jpeg, _, _ -> shown.add(jpeg); true }
         assertEquals(1, failures.size)
         assertTrue(failures[0].contains("could not be decoded"))
         assertEquals(1, shown.size)
@@ -50,7 +50,7 @@ class FrameStreamTest {
 
     @Test fun framesReceivedButNeverDecodedIsAnError() {
         try {
-            FrameStream.consume(ByteArrayInputStream(part(bad) + part(bad)), ct, decode = { _ -> null as Int? }) { _, _, _ -> }
+            FrameStream.consume(ByteArrayInputStream(part(bad) + part(bad)), ct, decode = { _ -> null as Int? }) { _, _, _ -> true }
             fail("expected IOException")
         } catch (e: IOException) {
             assertTrue(e.message, e.message!!.contains("none could be decoded"))
@@ -59,7 +59,7 @@ class FrameStreamTest {
 
     @Test fun cleanEofBeforeAnyFrameIsAnError() {
         try {
-            FrameStream.consume(ByteArrayInputStream(ByteArray(0)), ct, decode = { it.size }) { _, _, _ -> }
+            FrameStream.consume(ByteArrayInputStream(ByteArray(0)), ct, decode = { it.size }) { _, _, _ -> true }
             fail("expected IOException")
         } catch (e: IOException) {
             assertTrue(e.message, e.message!!.contains("before the first frame"))
@@ -85,7 +85,7 @@ class FrameStreamTest {
     @Test fun parsesPiStyleHttpResponseOverSocket() {
         val head = "HTTP/1.0 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=\"boundarydonotcross\"\r\n\r\n"
         serve(head.toByteArray() + part(good) + part(good)) { conn ->
-            val stats = conn.inputStream.use { FrameStream.consume(it, conn.contentType, decode = { b -> b.size }) { _, _, _ -> } }
+            val stats = conn.inputStream.use { FrameStream.consume(it, conn.contentType, decode = { b -> b.size }) { _, _, _ -> true } }
             assertEquals(2, stats.decoded)
         }
     }
@@ -93,11 +93,73 @@ class FrameStreamTest {
     @Test fun httpOkButEmptyBodyGivesActionableError() {
         serve("HTTP/1.0 200 OK\r\nContent-Type: multipart/x-mixed-replace;boundary=b\r\n\r\n".toByteArray()) { conn ->
             try {
-                conn.inputStream.use { FrameStream.consume(it, conn.contentType, decode = { b -> b.size }) { _, _, _ -> } }
+                conn.inputStream.use { FrameStream.consume(it, conn.contentType, decode = { b -> b.size }) { _, _, _ -> true } }
                 fail("expected IOException")
             } catch (e: IOException) {
                 assertTrue(e.message, e.message!!.contains("closed the connection"))
             }
+        }
+    }
+
+    @Test fun appliedCountsOnlyFramesTheSinkConfirms() {
+        val stats = FrameStream.consume(ByteArrayInputStream(part(good) + part(good)), ct, decode = { it.size }) { _, _, first -> first }
+        assertEquals(2, stats.decoded)
+        assertEquals(1, stats.applied)
+    }
+
+    @Test fun describeEndDistinguishesStages() {
+        fun st(r: Int, d: Int, a: Int) = FrameStats().apply {
+            repeat(r) { onReceived() }; repeat(d) { onDecoded() }; repeat(a) { onApplied() }
+        }
+        assertTrue(StreamDiagnostics.describeEnd(200, ct, 0, st(0, 0, 0)).startsWith("connected but the camera sent no bytes"))
+        assertTrue(StreamDiagnostics.describeEnd(200, ct, 99, st(0, 0, 0)).startsWith("bytes received but no multipart frames"))
+        assertTrue(StreamDiagnostics.describeEnd(200, ct, 99, st(2, 0, 0)).startsWith("frames received but none could be decoded"))
+        assertTrue(StreamDiagnostics.describeEnd(200, ct, 99, st(2, 2, 0)).startsWith("frames decoded but none applied"))
+        val ended = StreamDiagnostics.describeEnd(200, ct, 99, st(3, 3, 3))
+        assertTrue(ended, ended.startsWith("stream closed by the camera after 3 frame(s)") && ended.contains("HTTP 200") && ended.contains(ct))
+    }
+
+    @Test fun disconnectedStatusAlwaysHasReason() {
+        assertTrue(StreamDiagnostics.disconnectedStatus(null).contains("stream attempt ended"))
+        assertTrue(StreamDiagnostics.disconnectedStatus(RuntimeException()).contains("RuntimeException"))
+        assertTrue(StreamDiagnostics.disconnectedStatus(IOException("boom")).contains("boom"))
+    }
+
+    @Test fun saveFlashOnlyForSavedResult() {
+        assertTrue(SaveFlash.shouldFlash(CaptureResult.Saved("a.jpg", 1, true, null)))
+        assertTrue(!SaveFlash.shouldFlash(CaptureResult.Failed("x", false)))
+    }
+
+    @Test fun http11ConnectionCloseStreamDeliversFramesBeforeEofWithExpectedRequestHeaders() {
+        val requestHeaders = mutableListOf<String>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        ServerSocket(0).use { server ->
+            val t = thread {
+                server.accept().use { s ->
+                    val reader = s.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+                    while (true) { val l = reader.readLine() ?: break; if (l.isEmpty()) break; requestHeaders.add(l) }
+                    val out = s.getOutputStream()
+                    out.write(("HTTP/1.1 200 OK\r\nContent-Type: $ct\r\nConnection: close\r\n\r\n").toByteArray() + part(good))
+                    out.flush()
+                    release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    out.write(part(good)); out.flush()
+                }
+            }
+            val conn = URL("http://127.0.0.1:${server.localPort}/stream").openConnection() as HttpURLConnection
+            StreamHttp.configure(conn)
+            var gotFirstBeforeRelease = false
+            val stats = try {
+                conn.inputStream.use {
+                    FrameStream.consume(it, conn.contentType, decode = { b -> b.size }) { _, _, first ->
+                        if (first) { gotFirstBeforeRelease = release.count == 1L; release.countDown() }
+                        true
+                    }
+                }
+            } finally { conn.disconnect(); t.join(2000) }
+            assertTrue(gotFirstBeforeRelease)
+            assertEquals(2, stats.applied)
+            assertTrue(requestHeaders.toString(), requestHeaders.any { it.equals("Connection: close", true) })
+            assertTrue(requestHeaders.any { it.equals("Accept-Encoding: identity", true) })
         }
     }
 }

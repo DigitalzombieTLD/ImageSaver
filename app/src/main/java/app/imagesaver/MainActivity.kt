@@ -28,6 +28,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
@@ -69,6 +70,7 @@ class MainActivity : Activity() {
     private lateinit var resultText: TextView
     private lateinit var gpsText: TextView
     private lateinit var preview: ZoomableImageView
+    private lateinit var saveFlash: View
     private lateinit var captureService: CaptureService
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,6 +95,7 @@ class MainActivity : Activity() {
         resultText = findViewById(R.id.resultText)
         gpsText = findViewById(R.id.gpsText)
         preview = findViewById(R.id.preview)
+        saveFlash = findViewById(R.id.saveFlash)
 
         val prefs = getSharedPreferences("imagesaver", MODE_PRIVATE)
         urlInput.setText(CameraApi.normalizeHost(prefs.getString("url", "")).orEmpty())
@@ -268,7 +271,7 @@ class MainActivity : Activity() {
                 }
             }
             runWithRetry(onError = { e ->
-                streamStatus.text = "Disconnected${e?.message?.let { ": $it" } ?: ""} – retrying in 1s…"
+                streamStatus.text = StreamDiagnostics.disconnectedStatus(e)
             }) {
                 streamStatus.text = "Connecting…"
                 if (skipRefreshForFirstAttempt) {
@@ -434,40 +437,55 @@ class MainActivity : Activity() {
         streamStatus.text = "Stopped"
     }
 
-    /** Blocking; runs on IO. Returns when the stream ends, throws on failure (incl. no frame ever shown). */
-    private suspend fun readStream(url: String) {
+    /**
+     * Network IO and bitmap decoding run on IO; each decoded frame is handed to Main and the parser only continues
+     * after the preview really took it. Always ends by throwing with a concrete reason (a camera-side EOF included).
+     */
+    private suspend fun readStream(url: String): Unit = withContext(Dispatchers.IO) {
         val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 5000
-        conn.readTimeout = 10000
-        conn.setRequestProperty("Accept", "multipart/x-mixed-replace, image/jpeg, */*")
+        StreamHttp.configure(conn)
+        val stats = FrameStats()
+        var status = 0
+        var contentType: String? = null
+        var counter: CountingInputStream? = null
         try {
             runInterruptible {
-                if (conn.responseCode !in 200..299) throw java.io.IOException("HTTP ${conn.responseCode}")
-                val contentType = conn.contentType
-                var shown = false
                 try {
-                    conn.inputStream.use { stream ->
+                    status = conn.responseCode
+                    contentType = conn.contentType
+                    if (status !in 200..299) throw java.io.IOException("HTTP $status")
+                    CountingInputStream(conn.inputStream).also { counter = it }.use { stream ->
                         FrameStream.consume(
                             stream,
                             contentType,
+                            stats = stats,
                             decode = { jpeg -> BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) },
-                            onDecodeFailure = { stats ->
-                                if (stats.decoded == 0) runOnUiThread { streamStatus.text = stats.failureDiagnostic() }
+                            onDecodeFailure = { st ->
+                                if (st.decoded == 0) runOnUiThread { streamStatus.text = st.failureDiagnostic() }
                             },
-                        ) { jpeg, bmp, first ->
-                            shown = true
-                            runOnUiThread {
+                        ) { jpeg, bmp, _ ->
+                            val applied = runBlocking(Dispatchers.Main.immediate) {
+                                if (isDestroyed) return@runBlocking false
                                 latestFrame = jpeg
                                 preview.setFrame(bmp)
-                                if (first) streamStatus.text = "Connected"
+                                true
                             }
+                            if (applied) {
+                                val n = stats.applied + 1
+                                if (n == 1 || n % 15 == 0) runOnUiThread { streamStatus.text = StreamDiagnostics.connectedStatus(n) }
+                            }
+                            applied
                         }
                     }
                 } catch (e: java.io.IOException) {
-                    if (shown) throw e
-                    throw java.io.IOException("${e.message} [Content-Type: ${contentType ?: "none"}]", e)
+                    val bytes = counter?.count ?: 0L
+                    throw if (e is java.net.SocketTimeoutException) {
+                        java.io.IOException(StreamDiagnostics.describeTimeout(status, contentType, bytes, stats), e)
+                    } else if (e is StreamEndedException || status !in 200..299) e
+                    else java.io.IOException("${e.message} [${StreamDiagnostics.describeEnd(status, contentType, bytes, stats)}]", e)
                 }
             }
+            throw StreamEndedException(StreamDiagnostics.describeEnd(status, contentType, counter?.count ?: 0L, stats))
         } finally {
             conn.disconnect()
         }
@@ -546,6 +564,7 @@ class MainActivity : Activity() {
                     resultText.text = "Saved: ${result.fileName} (${formatSize(result.sizeBytes)})"
                     savedUri = result.uri?.let { Uri.parse(it) }
                     openButton.visibility = if (savedUri != null) View.VISIBLE else View.GONE
+                    if (SaveFlash.shouldFlash(result)) flashPreview()
                 }
                 is CaptureResult.Failed -> {
                     resultText.text = result.message
@@ -559,6 +578,14 @@ class MainActivity : Activity() {
                 else -> "GPS coordinates unavailable (permission denied, no fix, or timeout) – using ${FilenameBuilder.NO_GPS}"
             }
         }
+    }
+
+    /** Subtle white flash over the preview; a new save restarts it from the current alpha. */
+    private fun flashPreview() {
+        saveFlash.animate().cancel()
+        saveFlash.animate().alpha(SaveFlash.PEAK_ALPHA).setDuration(SaveFlash.FADE_IN_MS)
+            .withEndAction { saveFlash.animate().alpha(0f).setDuration(SaveFlash.FADE_OUT_MS).start() }
+            .start()
     }
 
     private fun formatSize(bytes: Long): String =
