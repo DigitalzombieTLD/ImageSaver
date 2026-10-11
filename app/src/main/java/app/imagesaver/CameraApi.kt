@@ -1,6 +1,8 @@
 package app.imagesaver
 
 import java.io.IOException
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import org.json.JSONArray
@@ -46,6 +48,7 @@ sealed class SettingsResult {
 
 /** Helpers for the Mobile Webcam API and blocking HTTP calls, always called off the UI thread. */
 object CameraApi {
+    private const val MAX_JSON_BYTES = 1_048_576
     private val SCHEME = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
     private val HOST_CHARS = Regex("^[A-Za-z0-9._-]+$")
     private val PORT = Regex("^[0-9]{1,5}$")
@@ -181,7 +184,7 @@ object CameraApi {
     }
 
     fun errorForStatus(code: Int): String = when (code) {
-        400 -> "Camera rejected the settings (HTTP 400: invalid request)"
+        400 -> "Camera rejected the request (HTTP 400: invalid request)"
         503 -> "Camera unavailable (HTTP 503)"
         500 -> "Camera error (HTTP 500)"
         else -> "Unexpected camera response (HTTP $code)"
@@ -202,7 +205,7 @@ object CameraApi {
             try {
                 val code = connection.responseCode
                 if (code !in 200..299) return Result.failure(IOException(errorForStatus(code)))
-                val value = connection.inputStream.use { parse(it.readBytes().toString(Charsets.UTF_8)) }
+                val value = connection.inputStream.use { parse(readJson(it)) }
                     ?: return Result.failure(IOException("Malformed camera $label response"))
                 Result.success(value)
             } finally {
@@ -229,7 +232,7 @@ object CameraApi {
                 connection.outputStream.use { it.write(body) }
                 val code = connection.responseCode
                 if (code !in 200..299) return SettingsResult.Failed(errorForStatus(code))
-                val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                val text = connection.inputStream.use { readJson(it) }
                 val settings = parseSettingsResponse(text)
                 if (settings == null) SettingsResult.Failed("Malformed camera settings response or change was not saved")
                 else SettingsResult.Applied(settings)
@@ -248,4 +251,16 @@ object CameraApi {
 
     private fun JSONObject.optIntStrict(key: String): Int? =
         (opt(key) as? Number)?.toInt()?.takeIf { (opt(key) as Number).toDouble() == it.toDouble() }
+
+    private fun readJson(input: InputStream): String {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (output.size() + count > MAX_JSON_BYTES) throw IOException("Camera response is too large")
+            output.write(buffer, 0, count)
+        }
+        return output.toByteArray().toString(Charsets.UTF_8)
+    }
 }

@@ -224,7 +224,9 @@ class MainActivity : Activity() {
                 currentCapabilities = null
                 capabilitiesHost = null
                 availableModes = emptyList()
+                fpsOptions = listOf(null)
                 displayedSettings = null
+                apiStatusMessage = null
                 resolutionSpinner.adapter = ArrayAdapter(
                     this@MainActivity,
                     android.R.layout.simple_spinner_dropdown_item,
@@ -325,8 +327,8 @@ class MainActivity : Activity() {
             resolutionSpinner.setSelection(modeIndex)
             updateFrameRateOptions(s.fps)
         }
-        if (s.quality != null && currentCapabilities?.quality != null) {
-            qualityInput.setText(s.quality.toString())
+        currentCapabilities?.quality?.let { quality ->
+            qualityInput.setText((s.quality ?: quality.value).toString())
         }
         updateCameraSettingsText()
     }

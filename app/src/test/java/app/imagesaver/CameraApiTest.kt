@@ -47,6 +47,12 @@ class CameraApiTest {
         assertFalse(unavailable.connected)
         assertNull(unavailable.quality)
         assertNull(CameraApi.parseCapabilities("""{"connected":true,"modes":[{"resolution":"640x480","fps":["30"]}],"quality":null}"""))
+
+        val withoutQuality = CameraApi.parseCapabilities(
+            """{"connected":true,"modes":[{"resolution":"640x480","fps":[30]}],"quality":null}""",
+        )!!
+        assertTrue(CameraApi.validateSettings(withoutQuality, "640x480", 30, null) == null)
+        assertTrue(CameraApi.validateSettings(withoutQuality, "640x480", 30, 20)!!.contains("does not support"))
     }
 
     @Test fun parsesSettingsAndNestedPostResponse() {
