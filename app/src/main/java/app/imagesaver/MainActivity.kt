@@ -40,11 +40,16 @@ class MainActivity : Activity() {
     private var pendingIncludeLocation = true
     private var discoveryJob: Job? = null
     private var savedUri: Uri? = null
-
-    private var skipNextStatus = false
+    private var currentCapabilities: CameraCapabilities? = null
+    private var capabilitiesHost: String? = null
+    private var availableModes: List<CameraMode> = emptyList()
+    private var fpsOptions: List<Int?> = emptyList()
+    private var displayedSettings: CameraSettings? = null
+    private var apiStatusMessage: String? = null
 
     private lateinit var urlInput: EditText
     private lateinit var resolutionSpinner: Spinner
+    private lateinit var fpsSpinner: Spinner
     private lateinit var qualityInput: EditText
     private lateinit var applySettings: Button
     private lateinit var cameraSettingsText: TextView
@@ -66,6 +71,7 @@ class MainActivity : Activity() {
         setContentView(R.layout.activity_main)
         urlInput = findViewById(R.id.urlInput)
         resolutionSpinner = findViewById(R.id.resolutionSpinner)
+        fpsSpinner = findViewById(R.id.fpsSpinner)
         qualityInput = findViewById(R.id.qualityInput)
         applySettings = findViewById(R.id.applySettings)
         cameraSettingsText = findViewById(R.id.cameraSettingsText)
@@ -83,10 +89,19 @@ class MainActivity : Activity() {
 
         val prefs = getSharedPreferences("imagesaver", MODE_PRIVATE)
         urlInput.setText(CameraApi.normalizeHost(prefs.getString("url", "")).orEmpty())
-        resolutionSpinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, CameraResolution.values().map { it.displayName },
-        )
-        resolutionSpinner.setSelection(CameraResolution.VGA.ordinal)
+        qualityInput.visibility = View.GONE
+        resolutionSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            override fun onItemSelected(
+                parent: android.widget.AdapterView<*>?,
+                view: View?,
+                position: Int,
+                id: Long,
+            ) {
+                val previousFps = fpsOptions.getOrNull(fpsSpinner.selectedItemPosition)
+                updateFrameRateOptions(previousFps)
+            }
+        }
         applySettings.setOnClickListener { onApplySettings() }
         includeLocation.isChecked = prefs.getBoolean("includeLocation", true)
         includeLocation.setOnCheckedChangeListener { _, isChecked ->
@@ -118,6 +133,7 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.rotateRight).setOnClickListener { preview.rotateRight() }
         findViewById<Button>(R.id.zoomReset).setOnClickListener { preview.resetZoom() }
         findViewById<Button>(R.id.captureButton).setOnClickListener { onCapturePressed() }
+        preview.onDoubleTapCapture = { onCapturePressed() }
     }
 
     override fun onStop() {
@@ -194,7 +210,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun startStream(host: String, settingsRequest: Pair<Int, Int>? = null) {
+    private fun startStream(host: String, settingsRequest: SettingsRequest? = null) {
         val url = CameraApi.streamUrl(host)
         val previous = streamJob ?: stoppingJob
         streamJob = scope.launch {
@@ -204,39 +220,139 @@ class MainActivity : Activity() {
                 connectButton.text = "Start"
                 return@launch
             }
+            if (capabilitiesHost != host) {
+                currentCapabilities = null
+                capabilitiesHost = null
+                availableModes = emptyList()
+                fpsOptions = listOf(null)
+                displayedSettings = null
+                apiStatusMessage = null
+                resolutionSpinner.adapter = ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    emptyList<String>(),
+                )
+                fpsSpinner.adapter = ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    listOf("Camera default"),
+                )
+                fpsSpinner.isEnabled = false
+                qualityInput.visibility = View.GONE
+                updateCameraSettingsText()
+            }
             connectButton.text = "Stop"
+            var usePostSettingsForFirstAttempt = false
             if (settingsRequest != null) {
                 // single POST per user action; never repeated by the retry loop below
                 cameraSettingsText.text = "Applying settings…"
-                when (val r = withContext(Dispatchers.IO) { CameraApi.postSettings(host, settingsRequest.first, settingsRequest.second) }) {
+                when (val r = withContext(Dispatchers.IO) {
+                    runInterruptible { CameraApi.postSettings(host, settingsRequest) }
+                }) {
                     is SettingsResult.Applied -> {
                         showSettings(r.settings)
-                        skipNextStatus = true
+                        apiStatusMessage = null
+                        updateCameraSettingsText()
+                        usePostSettingsForFirstAttempt = true
                     }
-                    is SettingsResult.Failed -> cameraSettingsText.text = r.message
+                    is SettingsResult.Failed -> {
+                        apiStatusMessage = r.message
+                        updateCameraSettingsText()
+                    }
                 }
             }
             runWithRetry(onError = { e ->
                 streamStatus.text = "Disconnected${e?.message?.let { ": $it" } ?: ""} – retrying in 1s…"
             }) {
                 streamStatus.text = "Connecting…"
-                withContext(Dispatchers.IO) {
-                    // exactly one /status read per connection attempt, before the stream is opened
-                    if (skipNextStatus) {
-                        skipNextStatus = false
-                    } else {
-                        CameraApi.fetchStatus(host)?.let { s -> runOnUiThread { showSettings(s) } }
-                    }
-                    readStream(url)
+                if (usePostSettingsForFirstAttempt) {
+                    usePostSettingsForFirstAttempt = false
+                } else {
+                    refreshCameraInfo(host)
                 }
+                readStream(url)
             }
         }
     }
 
+    private suspend fun refreshCameraInfo(host: String) {
+        val capabilities = withContext(Dispatchers.IO) { runInterruptible { CameraApi.fetchCapabilities(host) } }
+        val settings = withContext(Dispatchers.IO) { runInterruptible { CameraApi.fetchSettings(host) } }
+        withContext(Dispatchers.Main.immediate) {
+            if (capabilities.isSuccess) {
+                capabilitiesHost = host
+                showCapabilities(capabilities.getOrThrow())
+            } else {
+                apiStatusMessage = capabilities.exceptionOrNull()?.message ?: "Unable to read camera capabilities"
+            }
+            if (settings.isSuccess) {
+                showSettings(settings.getOrThrow())
+            } else {
+                val settingsError = settings.exceptionOrNull()?.message ?: "Unable to read camera settings"
+                apiStatusMessage = listOfNotNull(apiStatusMessage, settingsError).joinToString("\n")
+            }
+            if (capabilities.getOrNull()?.connected == false) {
+                apiStatusMessage = listOfNotNull("Camera reports that it is disconnected", apiStatusMessage).joinToString("\n")
+            }
+            updateCameraSettingsText()
+        }
+    }
+
+    private fun showCapabilities(capabilities: CameraCapabilities) {
+        currentCapabilities = capabilities
+        availableModes = capabilities.modes
+        resolutionSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            availableModes.map { it.displayName },
+        )
+        resolutionSpinner.isEnabled = availableModes.isNotEmpty()
+        updateFrameRateOptions()
+        val quality = capabilities.quality
+        qualityInput.visibility = if (quality == null) View.GONE else View.VISIBLE
+        qualityInput.hint = quality?.let { "Quality ${it.min}–${it.max} step ${it.step}" } ?: "Unsupported"
+        if (quality != null && qualityInput.text.isNullOrBlank()) {
+            qualityInput.setText(quality.value.toString())
+        }
+        apiStatusMessage = if (capabilities.connected) {
+            "Capabilities loaded${capabilities.device?.let { " for $it" } ?: ""}"
+        } else {
+            "Camera reports that it is disconnected"
+        }
+        updateCameraSettingsText()
+    }
+
     private fun showSettings(s: CameraSettings) {
-        cameraSettingsText.text = "Camera: ${s.display}"
-        CameraResolution.fromId(s.resolutionId)?.let { resolutionSpinner.setSelection(it.ordinal) }
-        qualityInput.setText(s.quality.toString())
+        displayedSettings = s
+        val modeIndex = availableModes.indexOfFirst { it.resolution == s.resolution }
+        if (modeIndex >= 0) {
+            resolutionSpinner.setSelection(modeIndex)
+            updateFrameRateOptions(s.fps)
+        }
+        currentCapabilities?.quality?.let { quality ->
+            qualityInput.setText((s.quality ?: quality.value).toString())
+        }
+        updateCameraSettingsText()
+    }
+
+    private fun updateFrameRateOptions(preferred: Int? = null) {
+        val mode = availableModes.getOrNull(resolutionSpinner.selectedItemPosition)
+        fpsOptions = listOf(null) + mode?.fps.orEmpty().map { it as Int? }
+        fpsSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            fpsOptions.map { it?.let { value -> "$value fps" } ?: "Camera default" },
+        )
+        fpsSpinner.isEnabled = fpsOptions.size > 1
+        fpsSpinner.setSelection(fpsOptions.indexOf(preferred).takeIf { it >= 0 } ?: 0)
+    }
+
+    private fun updateCameraSettingsText() {
+        val lines = listOfNotNull(
+            apiStatusMessage,
+            displayedSettings?.let { "Settings: ${it.display}" },
+        )
+        cameraSettingsText.text = lines.joinToString("\n")
     }
 
     private fun onApplySettings() {
@@ -245,13 +361,34 @@ class MainActivity : Activity() {
             cameraSettingsText.text = "Enter a valid camera IP or hostname"
             return
         }
-        val quality = CameraApi.parseQuality(qualityInput.text.toString())
-        if (quality == null) {
-            cameraSettingsText.text = "Quality must be an integer from ${CameraApi.MIN_QUALITY} to ${CameraApi.MAX_QUALITY}"
+        val capabilities = currentCapabilities
+        if (capabilities == null || capabilitiesHost != host) {
+            cameraSettingsText.text = "Start the camera stream to load its capabilities before applying settings"
             return
         }
-        val resolution = CameraResolution.values()[resolutionSpinner.selectedItemPosition]
-        startStream(host, resolution.id to quality)
+        val mode = availableModes.getOrNull(resolutionSpinner.selectedItemPosition)
+        if (mode == null) {
+            cameraSettingsText.text = "No camera resolutions are available"
+            return
+        }
+        val fps = fpsOptions.getOrNull(fpsSpinner.selectedItemPosition)
+        val qualityRange = capabilities.quality
+        val quality = if (qualityRange != null) {
+            CameraApi.parseQuality(qualityInput.text.toString(), qualityRange)
+                ?: run {
+                    cameraSettingsText.text =
+                        "Quality must be ${qualityRange.min}–${qualityRange.max} in steps of ${qualityRange.step}"
+                    return
+                }
+        } else {
+            null
+        }
+        val validationError = CameraApi.validateSettings(capabilities, mode.resolution, fps, quality)
+        if (validationError != null) {
+            cameraSettingsText.text = validationError
+            return
+        }
+        startStream(host, SettingsRequest(mode.resolution, fps, quality))
     }
 
     private fun stopStream() {

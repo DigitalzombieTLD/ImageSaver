@@ -21,6 +21,7 @@ class ZoomableImageView @JvmOverloads constructor(
     private var panY = 0f
     private val matrix = Matrix()
     private var rotation = 0
+    var onDoubleTapCapture: (() -> Unit)? = null
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(d: ScaleGestureDetector): Boolean {
@@ -37,7 +38,7 @@ class ZoomableImageView @JvmOverloads constructor(
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            resetZoom()
+            onDoubleTapCapture?.invoke()
             return true
         }
     })
