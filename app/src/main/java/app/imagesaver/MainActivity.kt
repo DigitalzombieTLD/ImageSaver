@@ -237,6 +237,7 @@ class MainActivity : Activity() {
                     android.R.layout.simple_spinner_dropdown_item,
                     listOf("Camera default"),
                 )
+                fpsSpinner.isEnabled = false
                 qualityInput.visibility = View.GONE
                 updateCameraSettingsText()
             }
@@ -306,6 +307,7 @@ class MainActivity : Activity() {
             availableModes.map { it.displayName },
         )
         resolutionSpinner.isEnabled = availableModes.isNotEmpty()
+        updateFrameRateOptions()
         val quality = capabilities.quality
         qualityInput.visibility = if (quality == null) View.GONE else View.VISIBLE
         qualityInput.hint = quality?.let { "Quality ${it.min}–${it.max} step ${it.step}" } ?: "Unsupported"

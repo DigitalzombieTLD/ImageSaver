@@ -22,7 +22,7 @@ data class QualityCapability(
     val default: Int,
     val value: Int,
 ) {
-    fun accepts(value: Int): Boolean = value in min..max && (value - min) % step == 0
+    fun accepts(value: Int): Boolean = step > 0 && value in min..max && (value - min) % step == 0
 }
 
 data class CameraCapabilities(
