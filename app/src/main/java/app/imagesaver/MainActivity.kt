@@ -14,6 +14,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.ArrayAdapter
+import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.EditText
 import android.widget.Spinner
 import android.widget.TextView
@@ -42,16 +44,19 @@ class MainActivity : Activity() {
     private var savedUri: Uri? = null
     private var currentCapabilities: CameraCapabilities? = null
     private var capabilitiesHost: String? = null
-    private var availableModes: List<CameraMode> = emptyList()
-    private var fpsOptions: List<Int?> = emptyList()
+    private val controlRows = LinkedHashMap<String, ControlRow>()
+    private var controlsStructure: List<List<Any>> = emptyList()
+    private var ignoreSavedSettings = false
     private var displayedSettings: CameraSettings? = null
     private var apiStatusMessage: String? = null
 
     private lateinit var urlInput: EditText
-    private lateinit var resolutionSpinner: Spinner
-    private lateinit var fpsSpinner: Spinner
-    private lateinit var qualityInput: EditText
-    private lateinit var applySettings: Button
+    private lateinit var mainControls: LinearLayout
+    private lateinit var moreControls: LinearLayout
+    private lateinit var moreControlsToggle: Button
+    private lateinit var applyControls: Button
+    private lateinit var controlsStatus: TextView
+    private lateinit var debugIgnoreSaved: CheckBox
     private lateinit var cameraSettingsText: TextView
     private lateinit var nummerInput: EditText
     private lateinit var standInput: EditText
@@ -70,10 +75,12 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         urlInput = findViewById(R.id.urlInput)
-        resolutionSpinner = findViewById(R.id.resolutionSpinner)
-        fpsSpinner = findViewById(R.id.fpsSpinner)
-        qualityInput = findViewById(R.id.qualityInput)
-        applySettings = findViewById(R.id.applySettings)
+        mainControls = findViewById(R.id.mainControls)
+        moreControls = findViewById(R.id.moreControls)
+        moreControlsToggle = findViewById(R.id.moreControlsToggle)
+        applyControls = findViewById(R.id.applyControls)
+        controlsStatus = findViewById(R.id.controlsStatus)
+        debugIgnoreSaved = findViewById(R.id.debugIgnoreSaved)
         cameraSettingsText = findViewById(R.id.cameraSettingsText)
         nummerInput = findViewById(R.id.nummerInput)
         standInput = findViewById(R.id.standInput)
@@ -89,20 +96,27 @@ class MainActivity : Activity() {
 
         val prefs = getSharedPreferences("imagesaver", MODE_PRIVATE)
         urlInput.setText(CameraApi.normalizeHost(prefs.getString("url", "")).orEmpty())
-        qualityInput.visibility = View.GONE
-        resolutionSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-            override fun onItemSelected(
-                parent: android.widget.AdapterView<*>?,
-                view: View?,
-                position: Int,
-                id: Long,
-            ) {
-                val previousFps = fpsOptions.getOrNull(fpsSpinner.selectedItemPosition)
-                updateFrameRateOptions(previousFps)
+        applyControls.setOnClickListener { onApplyControls() }
+        moreControlsToggle.setOnClickListener {
+            val show = moreControls.visibility != View.VISIBLE
+            moreControls.visibility = if (show) View.VISIBLE else View.GONE
+            moreControlsToggle.text = if (show) "More camera controls ▾" else "More camera controls ▸"
+        }
+        ignoreSavedSettings = prefs.getBoolean("ignoreSavedSettings", false)
+        debugIgnoreSaved.isChecked = ignoreSavedSettings
+        debugIgnoreSaved.setOnCheckedChangeListener { _, isChecked ->
+            ignoreSavedSettings = isChecked
+            prefs.edit().putBoolean("ignoreSavedSettings", isChecked).apply()
+            if (isChecked) displayedSettings = null
+            buildControls()
+            updateCameraSettingsText()
+            controlsStatus.text = if (isChecked) {
+                "Saved settings are ignored by the app from now on."
+            } else {
+                "Saved settings are loaded at the next (re)connect."
             }
         }
-        applySettings.setOnClickListener { onApplySettings() }
+        updateCameraSettingsText()
         includeLocation.isChecked = prefs.getBoolean("includeLocation", true)
         includeLocation.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("includeLocation", isChecked).apply()
@@ -210,7 +224,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun startStream(host: String, settingsRequest: SettingsRequest? = null) {
+    private fun startStream(host: String, controlChanges: Map<String, Int>? = null) {
         val url = CameraApi.streamUrl(host)
         val previous = streamJob ?: stoppingJob
         streamJob = scope.launch {
@@ -223,50 +237,42 @@ class MainActivity : Activity() {
             if (capabilitiesHost != host) {
                 currentCapabilities = null
                 capabilitiesHost = null
-                availableModes = emptyList()
-                fpsOptions = listOf(null)
                 displayedSettings = null
                 apiStatusMessage = null
-                resolutionSpinner.adapter = ArrayAdapter(
-                    this@MainActivity,
-                    android.R.layout.simple_spinner_dropdown_item,
-                    emptyList<String>(),
-                )
-                fpsSpinner.adapter = ArrayAdapter(
-                    this@MainActivity,
-                    android.R.layout.simple_spinner_dropdown_item,
-                    listOf("Camera default"),
-                )
-                fpsSpinner.isEnabled = false
-                qualityInput.visibility = View.GONE
+                buildControls()
                 updateCameraSettingsText()
             }
             connectButton.text = "Stop"
-            var usePostSettingsForFirstAttempt = false
-            if (settingsRequest != null) {
-                // single POST per user action; never repeated by the retry loop below
-                cameraSettingsText.text = "Applying settings…"
+            var skipRefreshForFirstAttempt = false
+            if (controlChanges != null) {
+                // single POST per explicit user Apply; never repeated by the retry loop below
+                controlsStatus.text = "Applying ${controlChanges.size} control(s)…"
                 when (val r = withContext(Dispatchers.IO) {
-                    runInterruptible { CameraApi.postSettings(host, settingsRequest) }
+                    runInterruptible { CameraApi.postSettings(host, controlChanges) }
                 }) {
                     is SettingsResult.Applied -> {
-                        showSettings(r.settings)
-                        apiStatusMessage = null
+                        if (!ignoreSavedSettings && r.settings != null) displayedSettings = r.settings
+                        controlRows.values.forEach { row ->
+                            if (row.spec.name in controlChanges) {
+                                row.baseline = row.selected
+                                row.touched = false
+                            }
+                        }
+                        controlsStatus.text = "Applied: " +
+                            controlChanges.entries.joinToString(", ") { "${ControlLabels.title(it.key)}=${it.value}" } +
+                            " – restarting stream"
                         updateCameraSettingsText()
-                        usePostSettingsForFirstAttempt = true
+                        skipRefreshForFirstAttempt = true
                     }
-                    is SettingsResult.Failed -> {
-                        apiStatusMessage = r.message
-                        updateCameraSettingsText()
-                    }
+                    is SettingsResult.Failed -> controlsStatus.text = "Apply failed: ${r.message}"
                 }
             }
             runWithRetry(onError = { e ->
                 streamStatus.text = "Disconnected${e?.message?.let { ": $it" } ?: ""} – retrying in 1s…"
             }) {
                 streamStatus.text = "Connecting…"
-                if (usePostSettingsForFirstAttempt) {
-                    usePostSettingsForFirstAttempt = false
+                if (skipRefreshForFirstAttempt) {
+                    skipRefreshForFirstAttempt = false
                 } else {
                     refreshCameraInfo(host)
                 }
@@ -277,17 +283,20 @@ class MainActivity : Activity() {
 
     private suspend fun refreshCameraInfo(host: String) {
         val capabilities = withContext(Dispatchers.IO) { runInterruptible { CameraApi.fetchCapabilities(host) } }
-        val settings = withContext(Dispatchers.IO) { runInterruptible { CameraApi.fetchSettings(host) } }
+        // Debug mode: never read (or display) the saved settings; capabilities are still needed to build controls.
+        val settings = if (ignoreSavedSettings) null else {
+            withContext(Dispatchers.IO) { runInterruptible { CameraApi.fetchSettings(host) } }
+        }
         withContext(Dispatchers.Main.immediate) {
             if (capabilities.isSuccess) {
                 capabilitiesHost = host
+                if (settings != null && settings.isSuccess) displayedSettings = settings.getOrThrow()
                 showCapabilities(capabilities.getOrThrow())
             } else {
                 apiStatusMessage = capabilities.exceptionOrNull()?.message ?: "Unable to read camera capabilities"
+                if (settings != null && settings.isSuccess) displayedSettings = settings.getOrThrow()
             }
-            if (settings.isSuccess) {
-                showSettings(settings.getOrThrow())
-            } else {
+            if (settings != null && settings.isFailure) {
                 val settingsError = settings.exceptionOrNull()?.message ?: "Unable to read camera settings"
                 apiStatusMessage = listOfNotNull(apiStatusMessage, settingsError).joinToString("\n")
             }
@@ -300,95 +309,122 @@ class MainActivity : Activity() {
 
     private fun showCapabilities(capabilities: CameraCapabilities) {
         currentCapabilities = capabilities
-        availableModes = capabilities.modes
-        resolutionSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            availableModes.map { it.displayName },
-        )
-        resolutionSpinner.isEnabled = availableModes.isNotEmpty()
-        updateFrameRateOptions()
-        val quality = capabilities.quality
-        qualityInput.visibility = if (quality == null) View.GONE else View.VISIBLE
-        qualityInput.hint = quality?.let { "Quality ${it.min}–${it.max} step ${it.step}" } ?: "Unsupported"
-        if (quality != null && qualityInput.text.isNullOrBlank()) {
-            qualityInput.setText(quality.value.toString())
+        val structure = capabilities.controls.map { listOf(it.name, it.type, it.min, it.max, it.step) }
+        if (structure != controlsStructure) {
+            controlsStructure = structure
+            buildControls()
         }
         apiStatusMessage = if (capabilities.connected) {
-            "Capabilities loaded${capabilities.device?.let { " for $it" } ?: ""}"
+            "Capabilities loaded${capabilities.device?.let { " for $it" } ?: ""} (${capabilities.controls.size} controls)"
         } else {
             "Camera reports that it is disconnected"
         }
         updateCameraSettingsText()
     }
 
-    private fun showSettings(s: CameraSettings) {
-        displayedSettings = s
-        val modeIndex = availableModes.indexOfFirst { it.resolution == s.resolution }
-        if (modeIndex >= 0) {
-            resolutionSpinner.setSelection(modeIndex)
-            updateFrameRateOptions(s.fps)
-        }
-        currentCapabilities?.quality?.let { quality ->
-            qualityInput.setText((s.quality ?: quality.value).toString())
-        }
-        updateCameraSettingsText()
+    private class ControlRow(val spec: CameraControl, var baseline: Int?, var selected: Int, var touched: Boolean = false) {
+        val changed: Boolean get() = touched && (baseline == null || selected != baseline)
     }
 
-    private fun updateFrameRateOptions(preferred: Int? = null) {
-        val mode = availableModes.getOrNull(resolutionSpinner.selectedItemPosition)
-        fpsOptions = listOf(null) + mode?.fps.orEmpty().map { it as Int? }
-        fpsSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            fpsOptions.map { it?.let { value -> "$value fps" } ?: "Camera default" },
-        )
-        fpsSpinner.isEnabled = fpsOptions.size > 1
-        fpsSpinner.setSelection(fpsOptions.indexOf(preferred).takeIf { it >= 0 } ?: 0)
+    /** Rebuilds slider/menu rows from the advertised capabilities; only controls the camera reports are shown. */
+    private fun buildControls() {
+        mainControls.removeAllViews()
+        moreControls.removeAllViews()
+        controlRows.clear()
+        val capabilities = currentCapabilities
+        val (main, more) = ControlLabels.split(capabilities?.controls.orEmpty())
+        main.forEach { addControlRow(mainControls, it) }
+        more.forEach { addControlRow(moreControls, it) }
+        if (capabilities == null) controlsStructure = emptyList()
+        moreControlsToggle.visibility = if (more.isEmpty()) View.GONE else View.VISIBLE
+        if (more.isEmpty()) moreControls.visibility = View.GONE
+        applyControls.isEnabled = controlRows.isNotEmpty()
+    }
+
+    private fun addControlRow(parent: LinearLayout, spec: CameraControl) {
+        val saved = if (ignoreSavedSettings) null else displayedSettings?.controls?.get(spec.name)?.takeIf { it in spec.min..spec.max }
+        val known = saved ?: spec.validValue
+        val row = ControlRow(spec, known, known ?: spec.min)
+        controlRows[spec.name] = row
+        val label = TextView(this)
+        fun refreshLabel() {
+            val shown = if (spec.isMenu) ControlLabels.menuLabel(spec.name, row.selected) else row.selected.toString()
+            label.text = "${spec.title}: $shown" + (if (known == null && !row.touched) " (current unknown)" else "") +
+                " [${spec.min}–${spec.max}${if (spec.isMenu) "" else ", step ${spec.effectiveStep}"}]"
+        }
+        refreshLabel()
+        parent.addView(label)
+        if (spec.isMenu) {
+            val values = (spec.min..spec.max).toList()
+            val spinner = Spinner(this)
+            spinner.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                values.map { ControlLabels.menuLabel(spec.name, it) },
+            )
+            spinner.setSelection(values.indexOf(row.selected).coerceAtLeast(0))
+            spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val v = values[position]
+                    if (v != row.selected) {
+                        row.selected = v
+                        row.touched = true
+                        refreshLabel()
+                    }
+                }
+            }
+            parent.addView(spinner)
+        } else {
+            val step = spec.effectiveStep
+            val seek = SeekBar(this)
+            seek.max = (spec.max - spec.min) / step
+            seek.progress = ((row.selected - spec.min) / step).coerceIn(0, seek.max)
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+                override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    row.selected = spec.min + progress * step
+                    row.touched = true
+                    refreshLabel()
+                }
+            })
+            parent.addView(seek)
+        }
     }
 
     private fun updateCameraSettingsText() {
         val lines = listOfNotNull(
             apiStatusMessage,
-            displayedSettings?.let { "Settings: ${it.display}" },
+            if (ignoreSavedSettings) {
+                "Debug: saved camera settings are ignored by the app (settings not loaded or restored). The Pi server " +
+                    "may still reapply its own saved settings when the stream starts."
+            } else {
+                displayedSettings?.let { "Active (read-only): ${it.display}" }
+            },
         )
         cameraSettingsText.text = lines.joinToString("\n")
     }
 
-    private fun onApplySettings() {
+    private fun onApplyControls() {
         val host = CameraApi.normalizeHost(urlInput.text.toString())
         if (host == null) {
-            cameraSettingsText.text = "Enter a valid camera IP or hostname"
+            controlsStatus.text = "Enter a valid camera IP or hostname"
             return
         }
         val capabilities = currentCapabilities
         if (capabilities == null || capabilitiesHost != host) {
-            cameraSettingsText.text = "Start the camera stream to load its capabilities before applying settings"
+            controlsStatus.text = "Start the camera stream to load its controls before applying"
             return
         }
-        val mode = availableModes.getOrNull(resolutionSpinner.selectedItemPosition)
-        if (mode == null) {
-            cameraSettingsText.text = "No camera resolutions are available"
+        val changes = controlRows.values.filter { it.changed }.associate { it.spec.name to it.selected }
+        val error = CameraApi.validateControls(capabilities, changes)
+        if (error != null) {
+            controlsStatus.text = error
             return
         }
-        val fps = fpsOptions.getOrNull(fpsSpinner.selectedItemPosition)
-        val qualityRange = capabilities.quality
-        val quality = if (qualityRange != null) {
-            CameraApi.parseQuality(qualityInput.text.toString(), qualityRange)
-                ?: run {
-                    cameraSettingsText.text =
-                        "Quality must be ${qualityRange.min}–${qualityRange.max} in steps of ${qualityRange.step}"
-                    return
-                }
-        } else {
-            null
-        }
-        val validationError = CameraApi.validateSettings(capabilities, mode.resolution, fps, quality)
-        if (validationError != null) {
-            cameraSettingsText.text = validationError
-            return
-        }
-        startStream(host, SettingsRequest(mode.resolution, fps, quality))
+        startStream(host, changes)
     }
 
     private fun stopStream() {
@@ -398,26 +434,38 @@ class MainActivity : Activity() {
         streamStatus.text = "Stopped"
     }
 
-    /** Blocking; runs on IO. Returns when the stream ends, throws on failure. */
+    /** Blocking; runs on IO. Returns when the stream ends, throws on failure (incl. no frame ever shown). */
     private suspend fun readStream(url: String) {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 5000
         conn.readTimeout = 10000
+        conn.setRequestProperty("Accept", "multipart/x-mixed-replace, image/jpeg, */*")
         try {
             runInterruptible {
                 if (conn.responseCode !in 200..299) throw java.io.IOException("HTTP ${conn.responseCode}")
-                var first = true
-                conn.inputStream.use { stream ->
-                    MjpegParser.readFrames(stream) { jpeg ->
-                        val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return@readFrames
-                        val announce = first
-                        first = false
-                        runOnUiThread {
-                            latestFrame = jpeg
-                            preview.setFrame(bmp)
-                            if (announce) streamStatus.text = "Connected"
+                val contentType = conn.contentType
+                var shown = false
+                try {
+                    conn.inputStream.use { stream ->
+                        FrameStream.consume(
+                            stream,
+                            contentType,
+                            decode = { jpeg -> BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) },
+                            onDecodeFailure = { stats ->
+                                if (stats.decoded == 0) runOnUiThread { streamStatus.text = stats.failureDiagnostic() }
+                            },
+                        ) { jpeg, bmp, first ->
+                            shown = true
+                            runOnUiThread {
+                                latestFrame = jpeg
+                                preview.setFrame(bmp)
+                                if (first) streamStatus.text = "Connected"
+                            }
                         }
                     }
+                } catch (e: java.io.IOException) {
+                    if (shown) throw e
+                    throw java.io.IOException("${e.message} [Content-Type: ${contentType ?: "none"}]", e)
                 }
             }
         } finally {
