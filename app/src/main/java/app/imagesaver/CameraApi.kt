@@ -3,49 +3,54 @@ package app.imagesaver
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
-/** Supported camera resolutions (id as used by the camera's `/camera/settings` API). */
-enum class CameraResolution(val id: Int, val label: String, val width: Int, val height: Int) {
-    QVGA(6, "QVGA", 320, 240),
-    VGA(2, "VGA", 640, 480),
-    SVGA(1, "SVGA", 800, 600),
-    XGA(3, "XGA", 1024, 768),
-    SXGA(4, "SXGA", 1280, 1024),
-    UXGA(5, "UXGA", 1600, 1200);
-
-    val displayName: String get() = "$label ${width}x$height"
-
-    companion object {
-        fun fromId(id: Int): CameraResolution? = values().firstOrNull { it.id == id }
-    }
+data class CameraMode(val resolution: String, val fps: List<Int>) {
+    val displayName: String
+        get() = "$resolution${if (fps.isEmpty()) "" else " (${fps.joinToString(", ")} fps)"}"
 }
 
-/** Currently active camera settings, as reported by the camera. */
-data class CameraSettings(val resolutionId: Int, val name: String, val width: Int, val height: Int, val quality: Int) {
-    val display: String get() = "$name ${width}x$height, quality $quality"
+data class QualityCapability(
+    val control: String,
+    val min: Int,
+    val max: Int,
+    val step: Int,
+    val default: Int,
+    val value: Int,
+) {
+    fun accepts(value: Int): Boolean = value in min..max && (value - min) % step == 0
 }
+
+data class CameraCapabilities(
+    val connected: Boolean,
+    val device: String?,
+    val format: String?,
+    val modes: List<CameraMode>,
+    val quality: QualityCapability?,
+)
+
+data class CameraSettings(val resolution: String, val fps: Int?, val quality: Int?) {
+    val display: String
+        get() = "$resolution, ${fps?.let { "$it fps" } ?: "camera-default fps"}" +
+            (quality?.let { ", quality $it" } ?: "")
+}
+
+data class SettingsRequest(val resolution: String, val fps: Int?, val quality: Int?)
 
 sealed class SettingsResult {
     data class Applied(val settings: CameraSettings) : SettingsResult()
     data class Failed(val message: String) : SettingsResult()
 }
 
-/** Pure helpers: host normalization, endpoint construction, request body and JSON parsing. */
+/** Helpers for the Mobile Webcam API and blocking HTTP calls, always called off the UI thread. */
 object CameraApi {
-    const val MIN_QUALITY = 10
-    const val MAX_QUALITY = 40
-    const val MAX_BODY_BYTES = 40
-
     private val SCHEME = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
     private val HOST_CHARS = Regex("^[A-Za-z0-9._-]+$")
     private val PORT = Regex("^[0-9]{1,5}$")
+    private val RESOLUTION = Regex("^[1-9][0-9]*x[1-9][0-9]*$")
 
-    /**
-     * Extracts the host (optionally with :port) from user input or an older saved URL, dropping scheme,
-     * credentials, path, query and fragment. Returns null when no valid host remains.
-     */
     fun normalizeHost(input: String?): String? {
         var s = input?.trim() ?: return null
         s = s.replace(SCHEME, "")
@@ -71,95 +76,176 @@ object CameraApi {
     }
 
     fun streamUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/stream" }
-    fun statusUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/status" }
-    fun settingsUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/camera/settings" }
+    fun capabilitiesUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/api/capabilities" }
+    fun settingsUrl(host: String): String? = normalizeHost(host)?.let { "http://$it/api/settings" }
 
-    fun parseQuality(text: String?): Int? {
-        val t = text?.trim() ?: return null
-        if (t.isEmpty() || !t.all { it in '0'..'9' } || t.length > 3) return null
-        return t.toInt().takeIf { it in MIN_QUALITY..MAX_QUALITY }
-    }
-
-    /** Exact form body `resolution=<id>&quality=<n>`; null if invalid or longer than [MAX_BODY_BYTES]. */
-    fun settingsBody(resolutionId: Int, quality: Int): ByteArray? {
-        if (CameraResolution.fromId(resolutionId) == null || quality !in MIN_QUALITY..MAX_QUALITY) return null
-        val body = "resolution=$resolutionId&quality=$quality".toByteArray(Charsets.US_ASCII)
-        return body.takeIf { it.size <= MAX_BODY_BYTES }
-    }
-
-    /** Parses `/status` JSON, reading only resolution and quality fields. Null if malformed/incomplete. */
-    fun parseStatus(json: String): CameraSettings? = parse(json, "resolution_id", "resolution_name", "resolution_width", "resolution_height")
-
-    /** Parses a successful `/camera/settings` response. Null if malformed/incomplete or it reports failure. */
-    fun parseSettingsResponse(json: String): CameraSettings? {
-        val o = try { JSONObject(json) } catch (e: JSONException) { return null }
-        if (o.has("error")) return null
-        for (k in listOf("ok", "success", "saved", "applied")) {
-            if (o.has(k) && o.opt(k) == false) return null
+    fun parseCapabilities(json: String): CameraCapabilities? = try {
+        val root = JSONObject(json)
+        val connected = root.opt("connected") as? Boolean ?: return null
+        val modesJson = root.opt("modes") as? JSONArray ?: return null
+        val modes = mutableListOf<CameraMode>()
+        for (i in 0 until modesJson.length()) {
+            val mode = modesJson.optJSONObject(i) ?: return null
+            val resolution = mode.optString("resolution", "").takeIf { RESOLUTION.matches(it) } ?: return null
+            val fpsJson = mode.opt("fps") as? JSONArray ?: return null
+            val fps = mutableListOf<Int>()
+            for (j in 0 until fpsJson.length()) {
+                val value = fpsJson.optIntStrict(j) ?: return null
+                if (value <= 0) return null
+                fps += value
+            }
+            modes += CameraMode(resolution, fps.distinct())
         }
-        return parse(json, "resolution_id", "name", "width", "height")
-    }
-
-    private fun parse(json: String, idKey: String, nameKey: String, wKey: String, hKey: String): CameraSettings? = try {
-        val o = JSONObject(json)
-        val id = o.getInt(idKey)
-        val q = o.getInt("jpeg_quality")
-        val name = o.getString(nameKey)
-        val w = o.getInt(wKey)
-        val h = o.getInt(hKey)
-        if (name.isEmpty() || w <= 0 || h <= 0) null else CameraSettings(id, name, w, h, q)
+        if (connected && modes.isEmpty()) return null
+        if (!root.has("quality")) return null
+        val qualityValue = root.opt("quality")
+        val quality = when {
+            qualityValue == JSONObject.NULL -> null
+            qualityValue is JSONObject -> {
+                val control = qualityValue.optString("control", "").takeIf { it.isNotBlank() } ?: return null
+                val min = qualityValue.optIntStrict("min") ?: return null
+                val max = qualityValue.optIntStrict("max") ?: return null
+                val step = qualityValue.optIntStrict("step") ?: return null
+                val default = qualityValue.optIntStrict("default") ?: return null
+                val value = qualityValue.optIntStrict("value") ?: return null
+                if (min > max || step <= 0 || default !in min..max || value !in min..max) return null
+                QualityCapability(control, min, max, step, default, value)
+            }
+            else -> return null
+        }
+        CameraCapabilities(
+            connected = connected,
+            device = root.optString("device").takeIf { it.isNotBlank() && it != "null" },
+            format = root.optString("format").takeIf { it.isNotBlank() && it != "null" },
+            modes = modes,
+            quality = quality,
+        )
     } catch (e: JSONException) {
         null
     }
 
+    fun parseSettings(json: String): CameraSettings? = try {
+        val root = JSONObject(json)
+        parseSettingsObject(root)
+    } catch (e: JSONException) {
+        null
+    }
+
+    fun parseSettingsResponse(json: String): CameraSettings? = try {
+        val root = JSONObject(json)
+        if (root.opt("saved") != true || root.has("error")) return null
+        parseSettingsObject(root.optJSONObject("settings") ?: return null)
+    } catch (e: JSONException) {
+        null
+    }
+
+    private fun parseSettingsObject(root: JSONObject): CameraSettings? {
+        val resolution = root.optString("resolution", "").takeIf { RESOLUTION.matches(it) } ?: return null
+        if (!root.has("fps") || !root.has("quality")) return null
+        val fps = if (root.opt("fps") == JSONObject.NULL) null else root.optIntStrict("fps") ?: return null
+        val quality = if (root.opt("quality") == JSONObject.NULL) null else root.optIntStrict("quality") ?: return null
+        if (fps != null && fps <= 0) return null
+        if (quality != null && quality < 0) return null
+        return CameraSettings(resolution, fps, quality)
+    }
+
+    fun settingsBody(resolution: String, fps: Int?, quality: Int?): ByteArray? {
+        if (!RESOLUTION.matches(resolution) || (fps != null && fps <= 0) || (quality != null && quality < 0)) return null
+        val body = JSONObject()
+            .put("resolution", resolution)
+            .put("fps", fps ?: JSONObject.NULL)
+        if (quality != null) body.put("quality", quality)
+        return body.toString().toByteArray(Charsets.UTF_8)
+    }
+
+    fun validateSettings(
+        capabilities: CameraCapabilities,
+        resolution: String,
+        fps: Int?,
+        quality: Int?,
+    ): String? {
+        val mode = capabilities.modes.firstOrNull { it.resolution == resolution }
+            ?: return "Select a resolution advertised by the camera"
+        if (fps != null && fps !in mode.fps) return "Select a frame rate advertised for $resolution"
+        if (quality != null) {
+            val range = capabilities.quality ?: return "This camera does not support adjustable JPEG quality"
+            if (!range.accepts(quality)) return "Quality must be ${range.min}–${range.max} in steps of ${range.step}"
+        }
+        return null
+    }
+
+    fun parseQuality(text: String?, capability: QualityCapability): Int? {
+        val value = text?.trim()?.takeIf { it.isNotEmpty() && it.all(Char::isDigit) && it.length <= 9 }
+            ?.toIntOrNull() ?: return null
+        return value.takeIf(capability::accepts)
+    }
+
     fun errorForStatus(code: Int): String = when (code) {
-        400 -> "Camera rejected the settings (HTTP 400: invalid resolution or quality)"
-        503 -> "Camera busy or unavailable (HTTP 503)"
-        500 -> "Camera error while applying settings (HTTP 500)"
+        400 -> "Camera rejected the settings (HTTP 400: invalid request)"
+        503 -> "Camera unavailable (HTTP 503)"
+        500 -> "Camera error (HTTP 500)"
         else -> "Unexpected camera response (HTTP $code)"
     }
 
-    /** Blocking. Reads `/status` once; null on any failure. */
-    fun fetchStatus(host: String): CameraSettings? {
-        val url = statusUrl(host) ?: return null
+    fun fetchCapabilities(host: String): Result<CameraCapabilities> =
+        get(capabilitiesUrl(host), "capabilities") { parseCapabilities(it) }
+
+    fun fetchSettings(host: String): Result<CameraSettings> =
+        get(settingsUrl(host), "settings") { parseSettings(it) }
+
+    private fun <T> get(url: String?, label: String, parse: (String) -> T?): Result<T> {
+        if (url == null) return Result.failure(IOException("Invalid camera host"))
         return try {
-            val c = URL(url).openConnection() as HttpURLConnection
-            c.connectTimeout = 3000
-            c.readTimeout = 3000
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.connectTimeout = 3000
+            connection.readTimeout = 3000
             try {
-                if (c.responseCode != 200) null else parseStatus(c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
+                val code = connection.responseCode
+                if (code !in 200..299) return Result.failure(IOException(errorForStatus(code)))
+                val value = connection.inputStream.use { parse(it.readBytes().toString(Charsets.UTF_8)) }
+                    ?: return Result.failure(IOException("Malformed camera $label response"))
+                Result.success(value)
             } finally {
-                c.disconnect()
+                connection.disconnect()
             }
         } catch (e: IOException) {
-            null
+            Result.failure(IOException("Camera $label request failed: ${e.message ?: e.javaClass.simpleName}", e))
         }
     }
 
-    /** Blocking. POSTs the settings once. */
-    fun postSettings(host: String, resolutionId: Int, quality: Int): SettingsResult {
+    fun postSettings(host: String, request: SettingsRequest): SettingsResult {
         val url = settingsUrl(host) ?: return SettingsResult.Failed("Invalid camera host")
-        val body = settingsBody(resolutionId, quality) ?: return SettingsResult.Failed("Invalid resolution or quality")
+        val body = settingsBody(request.resolution, request.fps, request.quality)
+            ?: return SettingsResult.Failed("Invalid camera settings")
         return try {
-            val c = URL(url).openConnection() as HttpURLConnection
-            c.connectTimeout = 5000
-            c.readTimeout = 10000
-            c.requestMethod = "POST"
-            c.doOutput = true
-            c.setFixedLengthStreamingMode(body.size)
-            c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.connectTimeout = 5000
+            connection.readTimeout = 10000
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.setFixedLengthStreamingMode(body.size)
+            connection.setRequestProperty("Content-Type", "application/json")
             try {
-                c.outputStream.use { it.write(body) }
-                val code = c.responseCode
-                if (code != 200) return SettingsResult.Failed(errorForStatus(code))
-                val text = c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-                val s = parseSettingsResponse(text)
-                if (s == null) SettingsResult.Failed("Camera response was malformed or reported failure") else SettingsResult.Applied(s)
+                connection.outputStream.use { it.write(body) }
+                val code = connection.responseCode
+                if (code !in 200..299) return SettingsResult.Failed(errorForStatus(code))
+                val text = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                val settings = parseSettingsResponse(text)
+                if (settings == null) SettingsResult.Failed("Malformed camera settings response or change was not saved")
+                else SettingsResult.Applied(settings)
             } finally {
-                c.disconnect()
+                connection.disconnect()
             }
         } catch (e: IOException) {
             SettingsResult.Failed("Network error: ${e.message ?: e.javaClass.simpleName}")
         }
     }
+
+    private fun JSONArray.optIntStrict(index: Int): Int? {
+        if (index !in 0 until length()) return null
+        return (opt(index) as? Number)?.toInt()?.takeIf { (opt(index) as Number).toDouble() == it.toDouble() }
+    }
+
+    private fun JSONObject.optIntStrict(key: String): Int? =
+        (opt(key) as? Number)?.toInt()?.takeIf { (opt(key) as Number).toDouble() == it.toDouble() }
 }

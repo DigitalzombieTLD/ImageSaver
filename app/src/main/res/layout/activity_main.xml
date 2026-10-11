@@ -59,24 +59,40 @@
                 android:id="@+id/resolutionSpinner"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_weight="2" />
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1" />
+
+            <Spinner
+                android:id="@+id/fpsSpinner"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <EditText
                 android:id="@+id/qualityInput"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginHorizontal="4dp"
+                android:layout_marginEnd="4dp"
                 android:layout_weight="1"
-                android:hint="Quality 10–40"
+                android:hint="Quality"
                 android:importantForAutofill="no"
                 android:inputType="number"
-                android:maxLength="3"
+                android:maxLength="9"
                 android:maxLines="1" />
 
             <Button
                 android:id="@+id/applySettings"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
                 android:singleLine="true"
                 android:text="Apply" />
         </LinearLayout>
@@ -98,7 +114,30 @@
             android:layout_height="300dp"
             android:layout_marginTop="6dp"
             android:background="#000000"
-            android:contentDescription="Live camera preview" />
+            android:contentDescription="Live camera preview. Double-tap to capture." />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/captureButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="Capture" />
+
+            <Button
+                android:id="@+id/openButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:text="Open image"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -191,29 +230,6 @@
             android:layout_height="wrap_content"
             android:text="Include GPS location"
             android:checked="true" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/captureButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:text="Capture" />
-
-            <Button
-                android:id="@+id/openButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_weight="1"
-                android:text="Open image"
-                android:visibility="gone" />
-        </LinearLayout>
 
         <TextView
             android:id="@+id/resultText"
