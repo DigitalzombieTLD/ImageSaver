@@ -63,3 +63,13 @@ Requires JDK 17 and the Android SDK (platform 34). Create `local.properties` wit
 ./gradlew testDebugUnitTest   # unit tests
 ./gradlew installDebug        # install on a connected device/emulator
 ```
+
+## Stream diagnostics and save feedback
+
+- The status line shows `Connected – N frame(s)` while frames are applied to the preview. When a stream attempt ends, the
+  status names the reason, e.g. `Disconnected: connected but the camera sent no bytes [HTTP 200, Content-Type: …,
+  parsed/decoded/shown counters] – retrying in 1s…`. A read timeout (10 s without data) is reported as idle/slow camera.
+- The stream request sends `Connection: close`, `Accept-Encoding: identity` and disables caching; the camera's response
+  body is delimited by EOF, so a clean EOF is treated as a disconnect and retried after 1 s.
+- After a successful save (Capture button or double-tap) the preview briefly flashes white (~300 ms, 35 % peak alpha).
+  Failed saves do not flash. The overlay is not touchable and does not affect the saved JPEG.

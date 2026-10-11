@@ -48,4 +48,11 @@ class StreamRetryTest {
         assertEquals(1, attempts)
         assertTrue(job.isCancelled)
     }
+
+    @Test fun normalReturnIsReportedAsStreamEnded() = runTest {
+        val errors = mutableListOf<Throwable?>()
+        val job = launch { runWithRetry(onError = { errors.add(it) }) { } }
+        runCurrent(); job.cancel()
+        assertTrue(errors.single() is StreamEndedException)
+    }
 }
